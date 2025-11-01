@@ -1,10 +1,12 @@
 import gc                      # Garbage collection
+import os                      # Operating system interface
 import time                    # Time functions
 import asyncio                 # Asynchronous I/O
 import traceback               # Exception handling
 import threading               # Thread management
 
 from poly_data.polymarket_client import PolymarketClient
+from poly_data.paper_trading_client import PaperTradingClient
 from poly_data.data_utils import update_markets, update_positions, update_orders
 from poly_data.websocket_handlers import connect_market_websocket, connect_user_websocket
 import poly_data.global_state as global_state
@@ -52,15 +54,16 @@ def update_periodically():
     - Positions and orders are updated every 5 seconds
     - Market data is updated every 30 seconds (every 6 cycles)
     - Stale pending trades are removed each cycle
+    - Paper trading report printed every 5 minutes (60 cycles)
     """
     i = 1
     while True:
         time.sleep(5)  # Update every 5 seconds
-        
+
         try:
             # Clean up stale trades
             remove_from_pending()
-            
+
             # Update positions and orders every cycle
             update_positions(avgOnly=True)  # Only update average price, not position size
             update_orders()
@@ -68,8 +71,14 @@ def update_periodically():
             # Update market data every 6th cycle (30 seconds)
             if i % 6 == 0:
                 update_markets()
+
+            # Print paper trading report every 60th cycle (5 minutes)
+            if hasattr(global_state, 'paper_trading') and global_state.paper_trading and i % 60 == 0:
+                global_state.client.print_performance_report()
+
+            if i % 6 == 0:
                 i = 1
-                    
+
             gc.collect()  # Force garbage collection to free memory
             i += 1
         except:
@@ -80,9 +89,16 @@ async def main():
     """
     Main application entry point. Initializes client, data, and manages websocket connections.
     """
-    # Initialize client
-    global_state.client = PolymarketClient()
-    
+    # Initialize client based on PAPER_TRADING environment variable
+    paper_trading_mode = os.getenv("PAPER_TRADING", "false").lower() in ["true", "1", "yes"]
+
+    if paper_trading_mode:
+        global_state.client = PaperTradingClient()
+        global_state.paper_trading = True
+    else:
+        global_state.client = PolymarketClient()
+        global_state.paper_trading = False
+
     # Initialize state and fetch initial data
     global_state.all_tokens = []
     update_once()
