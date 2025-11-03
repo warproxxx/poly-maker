@@ -1,6 +1,6 @@
 # Original Poly-Maker System Documentation
 
-This document provides comprehensive documentation of the original poly-maker market making system to preserve all critical implementation details during the Nautilus Trader integration.
+This document provides comprehensive documentation of the original poly-maker market making system to preserve all critical implementation.
 
 ## System Overview
 
@@ -379,4 +379,4 @@ Trade Execution → Position Merging → Performance Tracking
 4. **Memory Management**: Regular garbage collection
 5. **Batch Operations**: Group related API calls
 
-This documentation captures the sophisticated trading logic, risk management, and system architecture that makes the original poly-maker effective. All these patterns and thresholds should be preserved in the Nautilus Trader integration to maintain the proven market making performance. 
+This documentation captures the sophisticated trading logic, risk management, and system architecture that makes the original poly-maker effective. All these patterns and thresholds should be preserved to maintain the proven market making performance. 
