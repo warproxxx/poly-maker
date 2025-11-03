@@ -1,6 +1,6 @@
 # Critical Algorithms Reference - Original Poly-Maker
 
-This document captures the exact algorithms, formulas, and logical conditions from the original poly-maker code to ensure no critical details are lost during the Nautilus integration.
+This document captures the exact algorithms, formulas, and logical conditions from the original poly-maker code.
 
 ## Core Pricing Algorithm
 
@@ -511,4 +511,4 @@ sentiment_ratio = bid_liquidity / ask_liquidity
 # < 1.0 = Bearish (more ask volume)
 ```
 
-These exact algorithms represent the core intelligence of the poly-maker system. Every threshold, formula, and logical condition has been battle-tested through actual trading and should be preserved precisely in the Nautilus integration. 
+These exact algorithms represent the core intelligence of the poly-maker system. Every threshold, formula, and logical condition has been battle-tested through actual trading and should be preserved precisely.
