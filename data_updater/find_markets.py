@@ -6,6 +6,14 @@ import time
 import warnings
 warnings.filterwarnings("ignore")
 
+# Import new modules
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from poly_data.reward_calculator import RewardCalculator, calculate_reward_for_market_discovery
+from poly_data.risk_metrics import RiskMetricsCalculator, calculate_metrics_for_market
+from poly_data.regime_detector import RegimeDetector, classify_market_for_discovery
+
 
 if not os.path.exists('data'):
     os.makedirs('data')
@@ -207,6 +215,35 @@ def process_single_row(row, client):
     ret['sm_reward_per_100'] = round((best_bid_reward + best_ask_reward) / 2, 2)
     ret['gm_reward_per_100'] = round((best_bid_reward * best_ask_reward) ** 0.5, 2)
 
+    # NEW: Calculate improved reward metrics using correct Polymarket formula
+    try:
+        orderbook = {
+            'bids': {row['price']: row['size'] for _, row in bids_df.iterrows()},
+            'asks': {row['price']: row['size'] for _, row in asks_df.iterrows()}
+        }
+
+        reward_calc = RewardCalculator()
+        improved_rewards = reward_calc.calculate_optimal_reward_per_100_usd(
+            current_orderbook=orderbook,
+            daily_reward=rate,
+            max_spread=ret['max_spread'],
+            tick_size=TICK_SIZE,
+            min_size=ret['min_size']
+        )
+
+        ret['optimal_reward_per_100'] = round(improved_rewards['reward_per_100_usd'], 2)
+        ret['q_one'] = round(improved_rewards.get('q_one', 0), 2)
+        ret['q_two'] = round(improved_rewards.get('q_two', 0), 2)
+        ret['q_min'] = round(improved_rewards.get('q_min', 0), 2)
+        ret['is_single_sided_penalty'] = improved_rewards.get('is_single_sided', False)
+    except Exception as e:
+        # Fallback to original calculation if new one fails
+        ret['optimal_reward_per_100'] = ret['gm_reward_per_100']
+        ret['q_one'] = 0
+        ret['q_two'] = 0
+        ret['q_min'] = 0
+        ret['is_single_sided_penalty'] = False
+
     ret['end_date_iso'] = row['end_date_iso']
     ret['market_slug'] = row['market_slug']
     ret['token1'] = token1
@@ -270,21 +307,48 @@ def add_volatility(row):
     price_df['p'] = price_df['p'].round(2)
 
     price_df.to_csv(f'data/{row["token1"]}.csv', index=False)
-    
+
     price_df['log_return'] = np.log(price_df['p'] / price_df['p'].shift(1))
 
     row_dict = row.copy()
 
+    # Calculate standard volatilities
+    vol_1h = calculate_annualized_volatility(price_df, 1)
+    vol_3h = calculate_annualized_volatility(price_df, 3)
+    vol_6h = calculate_annualized_volatility(price_df, 6)
+    vol_12h = calculate_annualized_volatility(price_df, 12)
+    vol_24h = calculate_annualized_volatility(price_df, 24)
+    vol_7d = calculate_annualized_volatility(price_df, 24 * 7)
+    vol_14d = calculate_annualized_volatility(price_df, 24 * 14)
+    vol_30d = calculate_annualized_volatility(price_df, 24 * 30)
+
+    # Calculate downside volatility (for Sortino ratio)
+    risk_calc = RiskMetricsCalculator()
+    downside_vol_24h = risk_calc.calculate_downside_volatility(price_df, hours=24)
+
+    # Detect market regime
+    regime_info = classify_market_for_discovery(
+        volatility_1hour=vol_1h,
+        volatility_24hour=vol_24h,
+        volatility_7day=vol_7d,
+        price_history=price_df
+    )
+
     stats = {
-        '1_hour': calculate_annualized_volatility(price_df, 1),
-        '3_hour': calculate_annualized_volatility(price_df, 3),
-        '6_hour': calculate_annualized_volatility(price_df, 6),
-        '12_hour': calculate_annualized_volatility(price_df, 12),
-        '24_hour': calculate_annualized_volatility(price_df, 24),
-        '7_day': calculate_annualized_volatility(price_df, 24 * 7),
-        '14_day': calculate_annualized_volatility(price_df, 24 * 14),
-        '30_day': calculate_annualized_volatility(price_df, 24 * 30),
-        'volatility_price': price_df['p'].iloc[-1]
+        '1_hour': vol_1h,
+        '3_hour': vol_3h,
+        '6_hour': vol_6h,
+        '12_hour': vol_12h,
+        '24_hour': vol_24h,
+        '7_day': vol_7d,
+        '14_day': vol_14d,
+        '30_day': vol_30d,
+        'volatility_price': price_df['p'].iloc[-1],
+        'downside_vol_24h': downside_vol_24h,
+        'market_regime': regime_info['regime'].value,
+        'regime_confidence': regime_info['confidence'],
+        'is_good_for_mm': regime_info['is_good_for_mm'],
+        'hurst_exponent': regime_info.get('hurst_exponent', None)
     }
 
     new_dict = {**row_dict, **stats}
