@@ -1,6 +1,6 @@
 # Trading Algorithms Deep Dive - Original Poly-Maker
 
-This document provides a detailed analysis of the sophisticated trading algorithms and decision-making logic implemented in the original poly-maker system. These algorithms represent significant market making expertise that must be preserved in the Nautilus integration.
+This document provides a detailed analysis of the sophisticated trading algorithms and decision-making logic implemented in the original poly-maker system. These algorithms represent significant market making expertise that must be preserved.
 
 ## Core Trading Decision Framework
 
@@ -311,4 +311,4 @@ if price_change >= 0.05:  # 5 cent maximum deviation
 - **Timestamp Management**: Track when operations were initiated
 - **Update Coordination**: Prevent simultaneous position updates
 
-This sophisticated trading framework represents significant market making expertise developed through actual trading experience. The Nautilus integration must preserve these algorithms while leveraging the superior execution and risk management capabilities of the Nautilus framework. 
+This sophisticated trading framework represents significant market making expertise developed through actual trading experience.
