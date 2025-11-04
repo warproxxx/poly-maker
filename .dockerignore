@@ -1,0 +1,90 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.docker
+
+# Credentials
+credentials.json
+*.pem
+*.key
+
+# Logs
+logs/
+*.log
+
+# Data
+data/
+*.csv
+*.db
+*.sqlite
+
+# Positions
+positions/
+*.json
+
+# Git
+.git/
+.gitignore
+
+# Documentation (keep in image)
+# *.md
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# Node.js (for poly_merger)
+node_modules/
+package-lock.json
+npm-debug.log
+
+# Backup files
+*.backup
+.env.example.backup

@@ -1,0 +1,155 @@
+# =============================================================================
+# Docker Compose Configuration for Polymarket Liquidity Bot
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # Main Trading Bot
+  # Runs the market making bot with WebSocket connections
+  trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polymarket-trading-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - LOG_TO_FILE=true
+      - LOG_FILE_PATH=/app/logs/trading.log
+    volumes:
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist data
+      - ./data:/app/data
+      # Persist position data
+      - ./positions:/app/positions
+      # Mount credentials (if using service account)
+      - ./credentials.json:/app/credentials.json:ro
+    command: python main.py
+    networks:
+      - polymarket-network
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py", "trading"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Market Discovery Service
+  # Scans markets, calculates volatility, ranks opportunities
+  market-updater:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polymarket-market-updater
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - LOG_TO_FILE=true
+      - LOG_FILE_PATH=/app/logs/market-updater.log
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./credentials.json:/app/credentials.json:ro
+    command: python update_markets.py
+    networks:
+      - polymarket-network
+    depends_on:
+      - trading-bot
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py", "market-updater"]
+      interval: 120s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Statistics Service
+  # Updates account statistics and earnings
+  stats-updater:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polymarket-stats-updater
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - LOG_TO_FILE=true
+      - LOG_FILE_PATH=/app/logs/stats-updater.log
+    volumes:
+      - ./logs:/app/logs
+      - ./credentials.json:/app/credentials.json:ro
+    command: python update_stats.py
+    networks:
+      - polymarket-network
+    depends_on:
+      - trading-bot
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py", "stats-updater"]
+      interval: 180s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  polymarket-network:
+    driver: bridge
+
+# Optional: Monitoring with Prometheus and Grafana
+# Uncomment to enable monitoring stack
+#
+# volumes:
+#   prometheus-data:
+#   grafana-data:
+#
+# services:
+#   prometheus:
+#     image: prom/prometheus:latest
+#     container_name: polymarket-prometheus
+#     restart: unless-stopped
+#     volumes:
+#       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#       - prometheus-data:/prometheus
+#     command:
+#       - '--config.file=/etc/prometheus/prometheus.yml'
+#       - '--storage.tsdb.path=/prometheus'
+#     ports:
+#       - "9090:9090"
+#     networks:
+#       - polymarket-network
+#
+#   grafana:
+#     image: grafana/grafana:latest
+#     container_name: polymarket-grafana
+#     restart: unless-stopped
+#     volumes:
+#       - grafana-data:/var/lib/grafana
+#       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+#       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+#     environment:
+#       - GF_SECURITY_ADMIN_PASSWORD=admin
+#       - GF_USERS_ALLOW_SIGN_UP=false
+#     ports:
+#       - "3000:3000"
+#     networks:
+#       - polymarket-network
+#     depends_on:
+#       - prometheus

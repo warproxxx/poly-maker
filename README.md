@@ -58,6 +58,27 @@ uv sync --extra dev
 
 ### Quick Start
 
+**Option A: Docker (Recommended for Production)**
+
+```bash
+# Initialize setup
+make init
+
+# Edit .env with your credentials
+nano .env
+
+# Build and start all services
+make build
+make up
+
+# View logs
+make logs
+```
+
+See [DOCKER.md](DOCKER.md) for complete Docker documentation.
+
+**Option B: Native Python**
+
 ```bash
 # Run the market maker (recommended)
 uv run python main.py
@@ -69,7 +90,67 @@ uv run python update_markets.py
 uv run python update_stats.py
 ```
 
-### Setup Steps
+---
+
+## Docker Deployment (Recommended)
+
+### Why Docker?
+
+✅ **Easy deployment** - One command to start everything
+✅ **Isolated environment** - No dependency conflicts
+✅ **Auto-restart** - Services restart on failure
+✅ **Health monitoring** - Automatic health checks
+✅ **Production-ready** - Battle-tested configuration
+
+### Quick Start with Docker
+
+```bash
+# 1. Initialize (creates .env and directories)
+make init
+
+# 2. Edit .env with your credentials
+PK=your_private_key
+BROWSER_ADDRESS=your_wallet_address
+SPREADSHEET_URL=your_google_sheet_url
+
+# 3. Build Docker images
+make build
+
+# 4. Start all services
+make up
+
+# 5. Monitor logs
+make logs
+```
+
+### Docker Services
+
+The system runs **3 separate containers**:
+
+1. **trading-bot** - Main market making bot
+2. **market-updater** - Scans markets hourly
+3. **stats-updater** - Updates statistics every 3 hours
+
+All services auto-restart on failure and include health checks.
+
+### Common Docker Commands
+
+```bash
+make up           # Start all services
+make down         # Stop all services
+make logs         # View logs (live)
+make restart      # Restart all services
+make ps           # Check status
+make shell        # Open shell in trading bot
+make config       # Validate configuration
+make backup       # Backup data and logs
+```
+
+**Full documentation:** [DOCKER.md](DOCKER.md)
+
+---
+
+## Native Setup Steps
 
 #### 1. Clone the repository
 
