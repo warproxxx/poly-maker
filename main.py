@@ -10,8 +10,10 @@ from poly_data.websocket_handlers import connect_market_websocket, connect_user_
 import poly_data.global_state as global_state
 from poly_data.data_processing import remove_from_performing
 from dotenv import load_dotenv
+import config  # Centralized configuration
 
 load_dotenv()
+config.print_config()  # Print configuration on startup
 
 def update_once():
     """
@@ -34,9 +36,9 @@ def remove_from_pending():
             for trade_id in list(global_state.performing[col]):
                 
                 try:
-                    # If trade has been pending for more than 15 seconds, remove it
-                    if current_time - global_state.performing_timestamps[col].get(trade_id, current_time) > 15:
-                        print(f"Removing stale entry {trade_id} from {col} after 15 seconds")
+                    # If trade has been pending for more than STALE_TRADE_TIMEOUT seconds, remove it
+                    if current_time - global_state.performing_timestamps[col].get(trade_id, current_time) > config.STALE_TRADE_TIMEOUT:
+                        print(f"Removing stale entry {trade_id} from {col} after {config.STALE_TRADE_TIMEOUT} seconds")
                         remove_from_performing(col, trade_id)
                         print("After removing: ", global_state.performing, global_state.performing_timestamps)
                 except:
@@ -49,24 +51,24 @@ def remove_from_pending():
 def update_periodically():
     """
     Background thread function that periodically updates market data, positions and orders.
-    - Positions and orders are updated every 5 seconds
-    - Market data is updated every 30 seconds (every 6 cycles)
+    - Positions and orders are updated every UPDATE_INTERVAL seconds
+    - Market data is updated every (UPDATE_INTERVAL × MARKET_UPDATE_CYCLES) seconds
     - Stale pending trades are removed each cycle
     """
     i = 1
     while True:
-        time.sleep(5)  # Update every 5 seconds
-        
+        time.sleep(config.UPDATE_INTERVAL)  # Update interval from config
+
         try:
             # Clean up stale trades
             remove_from_pending()
-            
+
             # Update positions and orders every cycle
             update_positions(avgOnly=True)  # Only update average price, not position size
             update_orders()
 
-            # Update market data every 6th cycle (30 seconds)
-            if i % 6 == 0:
+            # Update market data every MARKET_UPDATE_CYCLES cycles
+            if i % config.MARKET_UPDATE_CYCLES == 0:
                 update_markets()
                 i = 1
                     
@@ -107,8 +109,8 @@ async def main():
         except:
             print("Error in main loop")
             print(traceback.format_exc())
-            
-        await asyncio.sleep(1)
+
+        await asyncio.sleep(config.WEBSOCKET_RECONNECT_DELAY)
         gc.collect()  # Clean up memory
 
 if __name__ == "__main__":

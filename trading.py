@@ -8,14 +8,37 @@ import math                     # Mathematical functions
 
 import poly_data.global_state as global_state
 import poly_data.CONSTANTS as CONSTANTS
+import config  # Centralized configuration
 
 # Import utility functions for trading
 from poly_data.trading_utils import get_best_bid_ask_deets, get_order_prices, get_buy_sell_amount, round_down, round_up
 from poly_data.data_utils import get_position, get_order, set_position
 
+# Import dynamic spread calculator
+from poly_data.dynamic_spread import DynamicSpreadCalculator, InventoryManager
+from poly_data.regime_detector import MarketRegime
+
 # Create directory for storing position risk information
 if not os.path.exists('positions/'):
     os.makedirs('positions/')
+
+def calculate_hours_to_close(row):
+    """
+    Calculate hours until market closes.
+
+    Args:
+        row: Market row with 'end_date_iso' field
+
+    Returns:
+        Hours remaining until close, or None if unknown
+    """
+    try:
+        end_date = pd.to_datetime(row['end_date_iso'])
+        now = pd.Timestamp.utcnow()
+        hours_remaining = (end_date - now).total_seconds() / 3600
+        return max(0, hours_remaining)
+    except:
+        return None  # Unknown close time
 
 def send_buy_order(order):
     """
@@ -40,8 +63,8 @@ def send_buy_order(order):
     size_diff = abs(existing_buy_size - order['size']) if existing_buy_size > 0 else float('inf')
     
     should_cancel = (
-        price_diff > 0.005 or  # Cancel if price diff > 0.5 cents
-        size_diff > order['size'] * 0.1 or  # Cancel if size diff > 10%
+        price_diff > config.PRICE_CHANGE_THRESHOLD or  # Cancel if price diff > threshold
+        size_diff > order['size'] * config.SIZE_CHANGE_THRESHOLD or  # Cancel if size diff > threshold
         existing_buy_size == 0  # Cancel if no existing buy order
     )
     
@@ -62,8 +85,8 @@ def send_buy_order(order):
         trade = False
 
     if trade:
-        # Only place orders with prices between 0.1 and 0.9 to avoid extreme positions
-        if order['price'] >= 0.1 and order['price'] < 0.9:
+        # Only place orders with prices between min and max to avoid extreme positions
+        if order['price'] >= config.MIN_TRADEABLE_PRICE and order['price'] < config.MAX_TRADEABLE_PRICE:
             print(f'Creating new order for {order["size"]} at {order["price"]}')
             print(order['token'], 'BUY', order['price'], order['size'])
             client.create_order(
@@ -101,8 +124,8 @@ def send_sell_order(order):
     size_diff = abs(existing_sell_size - order['size']) if existing_sell_size > 0 else float('inf')
     
     should_cancel = (
-        price_diff > 0.005 or  # Cancel if price diff > 0.5 cents
-        size_diff > order['size'] * 0.1 or  # Cancel if size diff > 10%
+        price_diff > config.PRICE_CHANGE_THRESHOLD or  # Cancel if price diff > threshold
+        size_diff > order['size'] * config.SIZE_CHANGE_THRESHOLD or  # Cancel if size diff > threshold
         existing_sell_size == 0  # Cancel if no existing sell order
     )
     
@@ -237,12 +260,78 @@ async def perform_trade(market):
                 avgPrice = pos['avgPrice']
                 
                 position = round_down(position, 2)
-               
+
                 # Calculate optimal bid and ask prices based on market conditions
-                bid_price, ask_price = get_order_prices(
-                    best_bid, best_bid_size, top_bid, best_ask, 
-                    best_ask_size, top_ask, avgPrice, row
-                )
+                # Choose between dynamic spreads or classic pricing
+                if config.USE_DYNAMIC_SPREADS:
+                    try:
+                        # Initialize dynamic spread calculator
+                        spread_calc = DynamicSpreadCalculator(
+                            base_spread_bps=config.DYNAMIC_SPREAD.base_spread_bps,
+                            min_spread_ticks=config.DYNAMIC_SPREAD.min_spread_ticks,
+                            max_spread_pct=config.DYNAMIC_SPREAD.max_spread_pct
+                        )
+
+                        # Calculate midpoint
+                        midpoint = (best_bid + best_ask) / 2
+
+                        # Calculate hours to close
+                        hours_to_close = calculate_hours_to_close(row)
+
+                        # Get market regime (with fallback)
+                        regime_str = row.get('market_regime', 'stable')
+                        try:
+                            market_regime = MarketRegime(regime_str)
+                        except:
+                            market_regime = MarketRegime.STABLE
+
+                        # Get other token position for total exposure
+                        other_token = global_state.REVERSE_TOKENS[str(token)]
+                        other_position = get_position(other_token)['size']
+
+                        # Calculate dynamic spread
+                        bid_price, ask_price = spread_calc.calculate_spread(
+                            midpoint=midpoint,
+                            tick_size=row['tick_size'],
+                            volatility_1hour=row.get('1_hour', 1.0),
+                            volatility_24hour=row.get('24_hour', 1.5),
+                            position=position,
+                            max_position=row.get('max_size', row['trade_size']),
+                            orderbook_depth_bid=best_bid_size,
+                            orderbook_depth_ask=best_ask_size,
+                            market_regime=market_regime,
+                            hours_to_close=hours_to_close
+                        )
+
+                        print(f"[DYNAMIC] Regime: {market_regime.value}, Hours to close: {hours_to_close:.1f}h, "
+                              f"Bid: {bid_price:.4f}, Ask: {ask_price:.4f}, Spread: {(ask_price-bid_price):.4f}")
+
+                        # Compare with old method if logging enabled
+                        if config.ENABLE_SPREAD_COMPARISON_LOGGING:
+                            old_bid, old_ask = get_order_prices(
+                                best_bid, best_bid_size, top_bid, best_ask,
+                                best_ask_size, top_ask, avgPrice, row
+                            )
+                            old_spread = old_ask - old_bid
+                            new_spread = ask_price - bid_price
+                            spread_ratio = new_spread / old_spread if old_spread > 0 else 1.0
+                            print(f"[COMPARISON] Old spread: {old_spread:.4f}, New spread: {new_spread:.4f}, "
+                                  f"Ratio: {spread_ratio:.2f}x")
+
+                    except Exception as e:
+                        print(f"[WARNING] Dynamic spread calculation failed: {e}")
+                        print("Falling back to classic pricing method")
+                        # Fallback to original method
+                        bid_price, ask_price = get_order_prices(
+                            best_bid, best_bid_size, top_bid, best_ask,
+                            best_ask_size, top_ask, avgPrice, row
+                        )
+                else:
+                    # Classic pricing method
+                    bid_price, ask_price = get_order_prices(
+                        best_bid, best_bid_size, top_bid, best_ask,
+                        best_ask_size, top_ask, avgPrice, row
+                    )
 
                 bid_price = round(bid_price, round_length)
                 ask_price = round(ask_price, round_length)
