@@ -8,29 +8,47 @@ import time
 import asyncio
 from poly_data.data_utils import set_position, set_order, update_positions
 
+_trade_tasks = {}
+
 def process_book_data(asset, json_data):
-    global_state.all_data[asset] = {
-        'asset_id': json_data['asset_id'],  # token_id for the Yes token
-        'bids': SortedDict(),
-        'asks': SortedDict()
-    }
+    with global_state.lock:
+        global_state.all_data[asset] = {
+            'asset_id': json_data['asset_id'],  # token_id for the Yes token
+            'bids': SortedDict(),
+            'asks': SortedDict()
+        }
 
-    global_state.all_data[asset]['bids'].update({float(entry['price']): float(entry['size']) for entry in json_data['bids']})
-    global_state.all_data[asset]['asks'].update({float(entry['price']): float(entry['size']) for entry in json_data['asks']})
+        global_state.all_data[asset]['bids'].update({float(entry['price']): float(entry['size']) for entry in json_data['bids']})
+        global_state.all_data[asset]['asks'].update({float(entry['price']): float(entry['size']) for entry in json_data['asks']})
 
-def process_price_change(asset, side, price_level, new_size):
-    if asset_id != global_state.all_data[asset]['asset_id']:
-        return  # skip updates for the No token to prevent duplicated updates
-    if side == 'bids':
-        book = global_state.all_data[asset]['bids']
-    else:
-        book = global_state.all_data[asset]['asks']
+def process_price_change(asset, asset_id, side, price_level, new_size):
+    with global_state.lock:
+        # Skip updates for the No token to prevent duplicated updates
+        if asset_id != global_state.all_data[asset]['asset_id']:
+            return
+        if side == 'bids':
+            book = global_state.all_data[asset]['bids']
+        else:
+            book = global_state.all_data[asset]['asks']
 
-    if new_size == 0:
-        if price_level in book:
-            del book[price_level]
-    else:
-        book[price_level] = new_size
+        if new_size == 0:
+            if price_level in book:
+                del book[price_level]
+        else:
+            book[price_level] = new_size
+
+
+def _schedule_trade(asset):
+    """Schedule at most one outstanding trade task per asset to avoid backlogs."""
+    if asset not in _trade_tasks or _trade_tasks[asset].done():
+        _trade_tasks[asset] = asyncio.create_task(_trade_wrapper(asset))
+
+
+async def _trade_wrapper(asset):
+    try:
+        await perform_trade(asset)
+    finally:
+        _trade_tasks.pop(asset, None)
 
 def process_data(json_datas, trade=True):
 
@@ -42,38 +60,42 @@ def process_data(json_datas, trade=True):
             process_book_data(asset, json_data)
 
             if trade:
-                asyncio.create_task(perform_trade(asset))
-                
+                _schedule_trade(asset)
+
         elif event_type == 'price_change':
             for data in json_data['price_changes']:
                 side = 'bids' if data['side'] == 'BUY' else 'asks'
                 price_level = float(data['price'])
                 new_size = float(data['size'])
-                process_price_change(asset, side, price_level, new_size)
+                asset_id = data.get('asset_id')
+                if asset_id is not None:
+                    process_price_change(asset, asset_id, side, price_level, new_size)
 
-                if trade:
-                    asyncio.create_task(perform_trade(asset))
-        
+                    if trade:
+                        _schedule_trade(asset)
+
 
         # pretty_print(f'Received book update for {asset}:', global_state.all_data[asset])
 
 def add_to_performing(col, id):
-    if col not in global_state.performing:
-        global_state.performing[col] = set()
-    
-    if col not in global_state.performing_timestamps:
-        global_state.performing_timestamps[col] = {}
+    with global_state.lock:
+        if col not in global_state.performing:
+            global_state.performing[col] = set()
 
-    # Add the trade ID and track its timestamp
-    global_state.performing[col].add(id)
-    global_state.performing_timestamps[col][id] = time.time()
+        if col not in global_state.performing_timestamps:
+            global_state.performing_timestamps[col] = {}
+
+        # Add the trade ID and track its timestamp
+        global_state.performing[col].add(id)
+        global_state.performing_timestamps[col][id] = time.time()
 
 def remove_from_performing(col, id):
-    if col in global_state.performing:
-        global_state.performing[col].discard(id)
+    with global_state.lock:
+        if col in global_state.performing:
+            global_state.performing[col].discard(id)
 
-    if col in global_state.performing_timestamps:
-        global_state.performing_timestamps[col].pop(id, None)
+        if col in global_state.performing_timestamps:
+            global_state.performing_timestamps[col].pop(id, None)
 
 def process_user_data(rows):
 
@@ -126,8 +148,8 @@ def process_user_data(rows):
                         print("Last trade update is ", global_state.last_trade_update)
                         print("Performing is ", global_state.performing)
                         print("Performing timestamps is ", global_state.performing_timestamps)
-                        
-                        asyncio.create_task(perform_trade(market))
+
+                        _schedule_trade(market)
 
                 elif row['status'] == 'MATCHED':
                     add_to_performing(col, row['id'])
@@ -138,15 +160,15 @@ def process_user_data(rows):
                     print("Last trade update is ", global_state.last_trade_update)
                     print("Performing is ", global_state.performing)
                     print("Performing timestamps is ", global_state.performing_timestamps)
-                    asyncio.create_task(perform_trade(market))
+                    _schedule_trade(market)
                 elif row['status'] == 'MINED':
                     remove_from_performing(col, row['id'])
 
             elif row['event_type'] == 'order':
                 print("ORDER EVENT FOR: ", row['market'], " STATUS: ",  row['status'], " TYPE: ", row['type'], " SIDE: ", side, "  ORIGINAL SIZE: ", row['original_size'], " SIZE MATCHED: ", row['size_matched'])
-                
+
                 set_order(token, side, float(row['original_size']) - float(row['size_matched']), row['price'])
-                asyncio.create_task(perform_trade(market))
+                _schedule_trade(market)
 
     else:
         print(f"User date received for {market} but its not in")
