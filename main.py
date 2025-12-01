@@ -30,18 +30,24 @@ def remove_from_pending():
         current_time = time.time()
             
         # Iterate through all performing trades
-        for col in list(global_state.performing.keys()):
-            for trade_id in list(global_state.performing[col]):
-                
+        with global_state.lock:
+            items = [(col, list(ids)) for col, ids in global_state.performing.items()]
+
+        for col, trade_ids in items:
+            for trade_id in trade_ids:
+
                 try:
                     # If trade has been pending for more than 15 seconds, remove it
-                    if current_time - global_state.performing_timestamps[col].get(trade_id, current_time) > 15:
+                    with global_state.lock:
+                        timestamp = global_state.performing_timestamps[col].get(trade_id, current_time)
+
+                    if current_time - timestamp > 15:
                         print(f"Removing stale entry {trade_id} from {col} after 15 seconds")
                         remove_from_performing(col, trade_id)
                         print("After removing: ", global_state.performing, global_state.performing_timestamps)
                 except:
                     print("Error in remove_from_pending")
-                    print(traceback.format_exc())                
+                    print(traceback.format_exc())
     except:
         print("Error in remove_from_pending")
         print(traceback.format_exc())
