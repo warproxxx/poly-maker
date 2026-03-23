@@ -26,6 +26,11 @@ params = {}
 # Lock for thread-safe trading operations
 lock = threading.Lock()
 
+# ============ Trade Function ============
+
+# Pluggable trade callback — set to perform_tweet_trade for tweet markets
+trade_function = None
+
 # ============ Trading State ============
 
 # Tracks trades that have been matched but not yet mined
