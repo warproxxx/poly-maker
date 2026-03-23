@@ -1,5 +1,6 @@
 output.txt
 data/
+.worktrees/
 credentials.json
 */credentials.json
 .env
