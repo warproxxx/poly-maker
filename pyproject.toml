@@ -35,7 +35,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["poly_data", "poly_stats", "poly_utils", "data_updater", "tweet_tracker"]
+packages = ["poly_data", "poly_stats", "poly_utils", "data_updater", "tweet_tracker", "tweet_engine"]
 
 [tool.black]
 line-length = 100
