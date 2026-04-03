@@ -1,0 +1,40 @@
+# Strategy parameters for InventorySkewStrategy
+# These are passed as-is to the strategy constructor via config.strategy_params.
+# Modify freely — the framework has no dependency on the keys here.
+
+# ── Position limits ────────────────────────────────────────────────────────────
+max_position_usdc: 200.0      # Hard cap per token (bot stops bidding at this level)
+min_order_size_usdc: 5.0      # Don't post orders smaller than this
+
+# ── Spread parameters ──────────────────────────────────────────────────────────
+base_spread: 0.02             # Total spread around fair value (2¢ = 1¢ each side)
+max_spread: 0.06              # Maximum spread when inventory is at cap
+min_spread: 0.005             # Never quote tighter than this (0.5¢ total)
+
+# ── Inventory skew ─────────────────────────────────────────────────────────────
+# Controls how aggressively both quotes shift to encourage inventory unwind.
+# 0.0 = no skew (symmetric quotes always)
+# 1.0 = full skew (at max position, bid shifts by full half_spread)
+skew_factor: 1.0
+
+# ── Order book imbalance signal ────────────────────────────────────────────────
+# Number of order book levels to include in the bid/ask imbalance calculation
+imbalance_levels: 5
+# How much the imbalance signal shifts the fair value estimate.
+# 0.0 = disabled (use raw mid-price only). Tune upward once live.
+imbalance_alpha: 0.0
+
+# ── Stop-loss ──────────────────────────────────────────────────────────────────
+# Exit position if unrealized loss exceeds this % of position value.
+# Calculated as: (best_bid - avg_price) / avg_price * 100
+stop_loss_pct: 5.0
+
+# ── Near-expiry cutoff ─────────────────────────────────────────────────────────
+# Cancel all orders and exit positions when this many seconds remain.
+# Should be <= expiry_warning_seconds in markets.yaml.
+expiry_cutoff_seconds: 45
+
+# ── Thin book protection ───────────────────────────────────────────────────────
+# Widen our spread proportionally when the book is wide.
+# Cap: never widen beyond this multiplier of base_spread.
+thin_book_spread_multiplier_cap: 3.0

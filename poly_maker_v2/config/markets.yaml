@@ -1,0 +1,31 @@
+# Market discovery and execution configuration
+
+# Which short-duration markets to trade (by interval in minutes)
+market_intervals: [5, 15]
+
+# Market tag filter — only trade markets tagged with these
+market_tags: ["crypto"]
+
+# Hard cap on simultaneous active markets (circuit breaker)
+max_active_markets: 50
+
+# How often to poll the REST API for new/expired markets (seconds)
+market_poll_interval_seconds: 30
+
+# Minimum USDC value of opposing positions to trigger a merge
+min_merge_size_usdc: 20.0
+
+# Whether to automatically merge positions when a market expires
+merge_check_on_expiry: true
+
+# Fire on_market_expiry callback this many seconds before resolution
+expiry_warning_seconds: 45
+
+execution:
+  # Polymarket CLOB API rate limits (conservative defaults)
+  rate_limit_per_second: 10
+  rate_limit_per_minute: 200
+
+  # Skip cancel+repost if existing order is within these thresholds
+  order_epsilon_price: 0.005      # in probability units (0.5¢)
+  order_epsilon_size_pct: 0.10    # 10% size difference

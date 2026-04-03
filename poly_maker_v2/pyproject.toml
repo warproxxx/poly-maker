@@ -1,0 +1,43 @@
+[project]
+name = "poly-maker-v2"
+version = "0.1.0"
+description = "Low-latency Polymarket market making bot for 5min/15min crypto markets"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "py-clob-client==0.28.0",
+    "python-dotenv==1.2.1",
+    "sortedcontainers==2.4.0",
+    "eth-account==0.13.7",
+    "eth-utils==5.3.1",
+    "poly_eip712_structs==0.0.1",
+    "py_order_utils==0.3.2",
+    "requests==2.32.5",
+    "websockets==15.0.1",
+    "cryptography==46.0.3",
+    "web3==7.14.0",
+    "pyyaml>=6.0",
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.2.2",
+    "pytest-asyncio>=0.23",
+    "black==24.4.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core", "feed", "registry", "execution", "positions", "operations", "strategy"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
