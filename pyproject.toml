@@ -8,6 +8,7 @@ license = { text = "MIT" }
 
 dependencies = [
     "py-clob-client==0.34.6",
+    "py-clob-client-v2==1.0.0",
     "python-dotenv==1.2.1",
     "pandas==2.3.3",
     "gspread==6.2.1",

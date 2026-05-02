@@ -2,9 +2,13 @@ from dotenv import load_dotenv          # Environment variable management
 import os                           # Operating system interface
 
 # Polymarket API client libraries
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, BalanceAllowanceParams, AssetType, PartialCreateOrderOptions
-from py_clob_client.constants import POLYGON
+from py_clob_client_v2.client import ClobClient
+from py_clob_client_v2.clob_types import (
+    OrderArgs,
+    OrderMarketCancelParams,
+    PartialCreateOrderOptions,
+    OpenOrderParams,
+)
 
 # Web3 libraries for blockchain interaction
 from web3 import Web3
@@ -15,8 +19,6 @@ import requests                     # HTTP requests
 import pandas as pd                 # Data analysis
 import json                         # JSON processing
 import subprocess                   # For calling external processes
-
-from py_clob_client.clob_types import OpenOrderParams
 
 # Smart contract ABIs
 from poly_data.abis import NegRiskAdapterABI, ConditionalTokenABI, erc20_abi
@@ -53,20 +55,24 @@ class PolymarketClient:
 
         # Don't print sensitive wallet information
         print("Initializing Polymarket client...")
-        chain_id=POLYGON
+        chain_id=137
         self.browser_wallet=Web3.to_checksum_address(browser_address)
 
         # Initialize the Polymarket API client
         self.client = ClobClient(
             host=host,
-            key=key,
             chain_id=chain_id,
+            key=key,
             funder=self.browser_wallet,
             signature_type=2
         )
 
-        # Set up API credentials
-        self.creds = self.client.create_or_derive_api_creds()
+        # Set up API credentials. Prefer deriving existing credentials because
+        # repeated create attempts may be blocked by Cloudflare on some IPs.
+        try:
+            self.creds = self.client.derive_api_key()
+        except Exception:
+            self.creds = self.client.create_api_key()
         self.client.set_api_creds(creds=self.creds)
         
         # Initialize Web3 connection to Polygon
@@ -122,17 +128,13 @@ class PolymarketClient:
             side=action
         )
 
-        signed_order = None
-
-        # Handle regular vs negative risk markets differently
-        if neg_risk == False:
-            signed_order = self.client.create_order(order_args)
-        else:
-            signed_order = self.client.create_order(order_args, options=PartialCreateOrderOptions(neg_risk=True))
-            
         try:
-            # Submit the signed order to the API
-            resp = self.client.post_order(signed_order)
+            # Sign and submit with the v2 helper so order-version cache refreshes
+            # automatically if Polymarket rotates the active order version.
+            resp = self.client.create_and_post_order(
+                order_args,
+                options=PartialCreateOrderOptions(neg_risk=neg_risk),
+            )
             return resp
         except Exception as ex:
             print(ex)
@@ -149,7 +151,9 @@ class PolymarketClient:
             tuple: (bids_df, asks_df) - DataFrames containing bid and ask orders
         """
         orderBook = self.client.get_order_book(market)
-        return pd.DataFrame(orderBook.bids).astype(float), pd.DataFrame(orderBook.asks).astype(float)
+        bids = orderBook.get("bids", []) if isinstance(orderBook, dict) else orderBook.bids
+        asks = orderBook.get("asks", []) if isinstance(orderBook, dict) else orderBook.asks
+        return pd.DataFrame(bids).astype(float), pd.DataFrame(asks).astype(float)
 
 
     def get_usdc_balance(self):
@@ -229,7 +233,7 @@ class PolymarketClient:
         Returns:
             DataFrame: All open orders with their details
         """
-        orders_df = pd.DataFrame(self.client.get_orders())
+        orders_df = pd.DataFrame(self.client.get_open_orders())
 
         # Convert numeric columns to float
         for col in ['original_size', 'size_matched', 'price']:
@@ -248,7 +252,7 @@ class PolymarketClient:
         Returns:
             DataFrame: Open orders for the specified market
         """
-        orders_df = pd.DataFrame(self.client.get_orders(OpenOrderParams(
+        orders_df = pd.DataFrame(self.client.get_open_orders(OpenOrderParams(
             market=market,
         )))
 
@@ -267,7 +271,7 @@ class PolymarketClient:
         Args:
             asset_id (str): Asset token ID
         """
-        self.client.cancel_market_orders(asset_id=str(asset_id))
+        self.client.cancel_market_orders(OrderMarketCancelParams(asset_id=str(asset_id)))
 
 
     
@@ -278,7 +282,7 @@ class PolymarketClient:
         Args:
             marketId (str): Market ID
         """
-        self.client.cancel_market_orders(market=marketId)
+        self.client.cancel_market_orders(OrderMarketCancelParams(market=str(marketId)))
 
     
     def merge_positions(self, amount_to_merge, condition_id, is_neg_risk_market):
