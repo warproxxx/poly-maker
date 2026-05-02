@@ -410,14 +410,17 @@ async def perform_trade(market):
                                 client.cancel_all_asset(order['token'])
                             else:
                                 # Place new buy order if any of these conditions are met:
+                                target_buy_size = buy_amount
+
                                 # 1. We can get a better price than current order
                                 if best_bid > orders['buy']['price']:
                                     print(f"Sending Buy Order for {token} because better price. "
                                           f"Orders look like this: {orders['buy']}. Best Bid: {best_bid}")
                                     send_buy_order(order)
-                                # 2. Current position + orders is not enough to reach max_size
-                                elif position + orders['buy']['size'] < 0.95 * max_size:
-                                    print(f"Sending Buy Order for {token} because not enough position + size")
+                                # 2. Current open buy order is smaller than the target quote size
+                                elif orders['buy']['size'] < target_buy_size * 0.95:
+                                    print(f"Sending Buy Order for {token} because open buy size is below target size. "
+                                          f"Open Buy Size: {orders['buy']['size']}, Target Buy Size: {target_buy_size}")
                                     send_buy_order(order)
                                 # 3. Our current order is too large and needs to be resized
                                 elif orders['buy']['size'] > order['size'] * 1.01:
