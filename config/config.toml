@@ -1,0 +1,48 @@
+# polymaker global config. Secrets live in .env, never here.
+# See the README.
+
+[wallet]
+# chain: Polygon mainnet
+chain_id = 137
+# signature_type — pick based on how your Polymarket account was created:
+#   0 = EOA (funds held directly by your key; no proxy)
+#   1 = email/magic proxy wallet
+#   2 = older browser-wallet Gnosis Safe proxy
+#   3 = POLY_1271 deposit wallet (the CURRENT architecture, ~June 2026+)
+# If your UI shows a "deposit address", you almost certainly have a deposit
+# wallet -> use 3. In every proxy case (1/2/3), BROWSER_ADDRESS is the DEPOSIT
+# address (the funder that holds your pUSD), NOT your signing EOA and NOT the
+# deployer/factory. Known SDK auth bugs live here (see the README) — `polymaker
+# doctor` / `livetest` will tell you if you picked the wrong type.
+signature_type = 3
+clob_host = "https://clob.polymarket.com"
+gamma_host = "https://gamma-api.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+polygon_rpc = "https://polygon-rpc.com"
+
+[engine]
+debounce_ms = 200               # min gap between quote recomputes per market
+reconcile_interval_s = 30       # REST drift reconciliation cadence
+catalog_refresh_s = 900         # market catalog rescan cadence (15 min)
+heartbeat = true                # exchange dead-man switch
+heartbeat_interval_s = 5
+journal = true                  # append raw WS/orders to journal/ for backtest
+loop = "uvloop"                 # "uvloop" | "asyncio"
+
+[risk]
+max_total_exposure_usdc = 5000.0     # sum of |position notional| + open buy notional
+max_event_group_loss_usdc = 1000.0   # neg-risk group worst-case loss cap
+max_market_notional_usdc = 800.0     # per-market position+orders notional cap
+daily_loss_kill_usdc = 250.0         # realized daily loss -> halt new quotes
+ws_stale_halt_s = 10.0               # no book updates for this long -> halt market
+max_order_error_rate = 0.25          # rolling order-post error fraction -> halt
+
+[execution]
+rate_budget_fraction = 0.25     # fraction of documented API limits we allow
+post_only = true                # every quote is post-only (maker-only mandate)
+max_orders_per_batch = 15       # exchange batch cap
+
+[paths]
+db = "state.db"
+journal_dir = "journal"
+log_dir = "logs"

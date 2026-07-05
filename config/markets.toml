@@ -1,0 +1,11 @@
+# The trade list (replaces the v1 Selected Markets sheet).
+# Each entry names a market by slug OR condition_id and a strategy profile.
+# `polymaker markets add <slug>` appends here; edit freely, hot-reloaded live.
+# Start empty — populate with `polymaker scan` then `polymaker markets`.
+
+# Example (disabled) entry:
+# [[markets]]
+# slug        = "will-the-democrats-win-the-2028-us-presidential-election"
+# profile     = "political-longdated"
+# enabled     = false
+# q_max_usdc  = 800      # optional per-market override of the profile value
