@@ -6,7 +6,7 @@ collateral (1 USDC/pUSD per pair) — a maker-only exit with zero market impact.
 Two execution paths:
   * EOA wallet (signature_type=0): direct contract call, fully implemented here.
   * Proxy/Safe wallet (signature_type 1/2): the merge tx must be routed through
-    the Safe. That path is gated on the Phase-2 wallet spike (docs 03 §6) — until
+    the Safe. That path is gated on the Phase-2 wallet spike (see the README) — until
     then merging is skipped (logged), and inventory is exited via limit sells
     instead. The bot is fully functional without it; merging just frees capital
     sooner.

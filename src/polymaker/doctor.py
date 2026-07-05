@@ -4,7 +4,7 @@ Verifies the environment is ready to trade WITHOUT posting any order:
 config + secrets, CLOB/Gamma reachable, wallet auth (L1->L2 creds), collateral
 balance + positions ON THE FUNDER (deposit/developer wallet, where funds live),
 a live market-WS book frame, and an authenticated user-WS connection. This is
-the gate before the live $5 round-trip (docs/scoping/06 Phase 2).
+the gate before the live $5 round-trip (the README).
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ async def run_doctor(cfg: Config, console: Console) -> bool:
         except Exception as e:  # noqa: BLE001
             check("wallet auth (L2 creds derived)", False, str(e))
             console.print("  [yellow]! signature-type mismatch? deposit wallets use sig_type=3 "
-                          "(config.toml). See docs 03 §9.[/yellow]")
+                          "(config.toml). See the README.[/yellow]")
     else:
         console.print("  [yellow]! skipping wallet checks (no secrets)[/yellow]")
 

@@ -62,7 +62,7 @@ class GammaClient:
 
         Uses the offset `/markets` endpoint because it reliably supports
         `tag_id` filtering today. (Keyset is the go-forward per docs; switch when
-        it supports tag filtering. See docs/scoping/03-api-layer.md §4.)
+        it supports tag filtering. See the README.)
         """
         offset = 0
         for _ in range(max_pages):

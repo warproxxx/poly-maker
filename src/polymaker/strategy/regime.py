@@ -1,4 +1,4 @@
-"""Per-market regime decision (see docs/scoping/04-strategy.md §5).
+"""Per-market regime decision (see the README).
 
 Priority order, highest first:
   HALTED       kill switch / stale data / resolved / past halt-before window

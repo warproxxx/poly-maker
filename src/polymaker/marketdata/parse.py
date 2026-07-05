@@ -1,7 +1,7 @@
 """Pure parsers for market-WS wire messages -> structured updates.
 
 Kept separate from the socket so they're unit-testable against captured frames.
-Verified against live frames on 2026-07-05 (docs/scoping/03-api-layer.md §5):
+Verified against live frames on 2026-07-05 (the README):
 
   book:        {market, asset_id, bids:[{price,size}], asks:[...], timestamp, hash, tick_size}
   price_change:{market, timestamp, price_changes:[{asset_id, price, size, side, hash}]}

@@ -1,4 +1,4 @@
-"""Live wallet round-trip test — the Phase-2 wallet spike (docs 06).
+"""Live wallet round-trip test — the Phase-2 wallet spike (see the README).
 
 Proves the full V2 order path against the real exchange with minimal risk:
 places ONE post-only BUY well below the touch (so it rests and cannot fill),
@@ -50,7 +50,7 @@ async def run_livetest(cfg: Config, console: Console, notional_usdc: float = 5.0
         console.print(f"  [green]✓[/green] wallet auth — address {gw.address[:12]}…")
     except Exception as e:  # noqa: BLE001
         console.print(f"  [red]✗ wallet auth failed:[/red] {e}")
-        console.print("  [yellow]Auth/signature-type mismatch (docs 03 §9). If your account has a "
+        console.print("  [yellow]Auth/signature-type mismatch (see the README). If your account has a "
                       "'deposit address', set signature_type=3 (POLY_1271) in config.toml and use the "
                       "deposit address as BROWSER_ADDRESS. Errors like 'maker address not allowed, use "
                       "the deposit wallet flow' or 'signer must be the API key address' mean the type is "

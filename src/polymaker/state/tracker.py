@@ -2,7 +2,7 @@
 
 Consumes *normalized* user-stream events (the wire-format extraction lives in
 userstream/, so this is unit-testable with synthetic events) and drives the
-state machine from docs/scoping/02-architecture.md:
+state machine from the README:
 
     Trade:  MATCHED -> MINED -> CONFIRMED
                  └──────────-> FAILED (roll back the optimistic fill, reconcile)

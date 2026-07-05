@@ -1,7 +1,7 @@
 """StateStore: the single owner of positions and open orders.
 
 Replaces v1's module-level global dicts + the `performing`/`last_trade_update`
-races. Three inputs, one arbitration rule (docs/scoping/02-architecture.md):
+races. Three inputs, one arbitration rule (the README):
 
   * WS fill events apply immediately (optimistic),
   * REST reconciliation corrects drift ONLY for tokens with no in-flight trades,

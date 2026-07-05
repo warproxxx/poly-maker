@@ -1,6 +1,6 @@
 """Append-only JSONL event journal.
 
-Captures raw WS-in and orders-out so the replay backtester (docs 04 §9) can
+Captures raw WS-in and orders-out so the replay backtester (see the README) can
 reconstruct books and re-run the strategy. Also the substrate for post-mortems.
 Cheap: one line per event, flushed, rotated by day.
 """

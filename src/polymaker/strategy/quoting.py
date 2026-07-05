@@ -3,7 +3,7 @@
 This is the deterministic core of the strategy. No I/O, no wall-clock reads
 except values passed in. Everything here is exercised directly by unit tests.
 
-Model (see docs/scoping/04-strategy.md):
+Model (see the README):
   reservation  r  = FV - skew(inventory)
   half-spread  δ  = base + c_vol·σ + c_tox·toxicity   (clamped to reward band in QUIET)
   YES entry bid   = r - δ                       (BUY YES, USDC-collateralized)

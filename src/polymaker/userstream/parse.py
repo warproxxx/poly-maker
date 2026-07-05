@@ -8,7 +8,7 @@ always the maker):
   * maker & taker on DIFFERENT outcomes -> a mint: we BUY the opposite token
 
 NOTE: exact field names must be reconfirmed in the Phase-2 wallet spike
-(docs/scoping/03-api-layer.md §9); this is coded to the v1-observed shape.
+(the README); this is coded to the v1-observed shape.
 """
 
 from __future__ import annotations

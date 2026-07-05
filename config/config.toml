@@ -1,5 +1,5 @@
 # polymaker global config. Secrets live in .env, never here.
-# See docs/scoping/05-config-and-ops.md.
+# See the README.
 
 [wallet]
 # chain: Polygon mainnet
@@ -12,7 +12,7 @@ chain_id = 137
 # If your UI shows a "deposit address", you almost certainly have a deposit
 # wallet -> use 3. In every proxy case (1/2/3), BROWSER_ADDRESS is the DEPOSIT
 # address (the funder that holds your pUSD), NOT your signing EOA and NOT the
-# deployer/factory. Known SDK auth bugs live here (docs 03 §9) — `polymaker
+# deployer/factory. Known SDK auth bugs live here (see the README) — `polymaker
 # doctor` / `livetest` will tell you if you picked the wrong type.
 signature_type = 3
 clob_host = "https://clob.polymarket.com"

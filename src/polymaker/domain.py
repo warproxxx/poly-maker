@@ -24,7 +24,7 @@ class Side(str, Enum):
 
 
 class Regime(str, Enum):
-    """Per-market quoting regime (see docs/scoping/04-strategy.md §5)."""
+    """Per-market quoting regime (see the README)."""
 
     QUIET = "QUIET"  # farming posture: in-band, layered, full size
     TRENDING = "TRENDING"  # persistent one-sided flow: lean + widen + half size

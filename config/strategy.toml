@@ -1,6 +1,6 @@
 # Named strategy parameter profiles (replaces the v1 Hyperparameters sheet).
 # markets.toml maps each market to one of these profiles.
-# See docs/scoping/04-strategy.md §8.
+# See the README.
 
 [profiles.political-longdated]
 # --- fair value ---

@@ -1,4 +1,4 @@
-"""RiskManager: pre-trade gates and circuit breakers (docs 04 §6, 02).
+"""RiskManager: pre-trade gates and circuit breakers (see the README).
 
 Consulted by the engine before every quote set. Returns a per-market decision
 (size scale / reduce-only / halt) and owns the global kill switches. Position
