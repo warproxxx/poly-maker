@@ -52,6 +52,14 @@ class RiskManager:
         return total
 
     @property
+    def net_cash(self) -> float:
+        return self._net_cash
+
+    @property
+    def inventory_value(self) -> float:
+        return self._inventory_value()
+
+    @property
     def equity(self) -> float:
         return self._net_cash + self._inventory_value()
 
@@ -116,13 +124,15 @@ class RiskManager:
         return RiskDecision(False, False, scale, "")
 
     def _market_notional(self, meta: MarketMeta) -> float:
+        """Filled-inventory notional for this market. Deliberately does NOT count
+        our own resting BUY orders: those are the quotes we're about to replace,
+        and counting them makes the size taper collapse the moment we place a full
+        quote (self-reinforcing cancel/replace churn). Worst-case fill is bounded
+        instead by small per-quote sizes + the position cap that this drives."""
         total = 0.0
         for tok in (meta.yes.token_id, meta.no.token_id):
             pos = self._store.position(tok)
             total += pos.size * self._marks.get(tok, pos.avg_price or 0.5)
-            for o in self._store.orders_for(tok):
-                if o.side is Side.BUY:
-                    total += o.notional
         return total
 
     def _total_exposure(self) -> float:
@@ -130,9 +140,6 @@ class RiskManager:
         for tok, pos in self._store.positions.items():
             if pos.size > 0:
                 total += pos.size * self._marks.get(tok, pos.avg_price or 0.5)
-        for o in self._store.orders.values():
-            if o.side is Side.BUY:
-                total += o.notional
         return total
 
 

@@ -55,7 +55,11 @@ def scan(
         return len(metas)
 
     n = asyncio.run(_go())
-    console.print(f"[green]Scanned and stored {n} markets.[/green] Run [bold]polymaker markets[/bold] to browse.")
+    csv_path = Path(config_dir).parent / "markets.csv"
+    written = store.export_csv(csv_path)
+    console.print(f"[green]Scanned and stored {n} markets.[/green] "
+                  f"Wrote [bold]{csv_path}[/bold] ({written} rows) — open it, pick markets, "
+                  f"then `polymaker markets-add <slug>`.")
     store.close()
 
 
@@ -132,6 +136,48 @@ def status(config_dir: str = typer.Option("config", help="config directory")) ->
             table.add_row(tok[:16] + "…", f"{p['size']:.2f}", f"{p['avg_price']:.3f}")
         console.print(table)
     store.close()
+
+
+@app.command()
+def pnl(config_dir: str = typer.Option("config", help="config directory")) -> None:
+    """Show PnL from the recorded snapshots (equity, daily PnL, fills)."""
+    import sqlite3
+
+    cfg = Config.load(config_dir)
+    conn = sqlite3.connect(cfg.paths.db)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT ts, equity, net_cash, inventory_value, daily_pnl FROM pnl_snapshots "
+        "ORDER BY ts DESC LIMIT 1"
+    ).fetchall()
+    if not rows:
+        console.print("[yellow]No PnL snapshots yet (run the engine first).[/yellow]")
+    else:
+        r = rows[0]
+        color = "green" if r["daily_pnl"] >= 0 else "red"
+        console.print(f"[bold]equity:[/bold] {r['equity']:.4f}  "
+                      f"[bold]inventory:[/bold] {r['inventory_value']:.4f}  "
+                      f"[bold]net cash:[/bold] {r['net_cash']:.4f}")
+        console.print(f"[bold]daily PnL:[/bold] [{color}]{r['daily_pnl']:+.4f}[/{color}] pUSD")
+    nfills = conn.execute("SELECT COUNT(*) n FROM fills").fetchone()["n"]
+    console.print(f"[dim]total fills recorded: {nfills}[/dim]")
+    conn.close()
+
+
+@app.command(name="export-csv")
+def export_csv(
+    config_dir: str = typer.Option("config", help="config directory"),
+    out: str = typer.Option("markets.csv", help="output CSV path"),
+    limit: int = typer.Option(500, help="max rows"),
+) -> None:
+    """Export the scored market catalog to a CSV for easy picking."""
+    from polymaker.catalog.store import CatalogStore
+
+    cfg = Config.load(config_dir)
+    store = CatalogStore(cfg.paths.db)
+    n = store.export_csv(out, limit)
+    store.close()
+    console.print(f"[green]Wrote {n} markets to {out}.[/green]")
 
 
 @app.command()

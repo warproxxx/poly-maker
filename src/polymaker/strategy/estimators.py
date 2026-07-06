@@ -9,7 +9,7 @@ observations with timestamps, read scalar summaries. No I/O.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from polymaker.domain import Side
 
@@ -186,7 +186,6 @@ class MarketEstimators:
     markout: MarkoutTracker
     last_fv: float | None = None
     last_fv_ts: float = 0.0
-    fv_history: list[tuple[float, float]] = field(default_factory=list)
 
     def on_fair_value(self, fv: float, ts: float) -> None:
         self.vol.update(fv, ts)

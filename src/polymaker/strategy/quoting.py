@@ -198,6 +198,9 @@ def _maybe_exit(
     if view.best_bid is not None:
         target = max(target, view.best_bid + tick)
     price = round_to_tick(target, tick, dec, up=True)
-    size = round(pos.size, 2)
+    # FLOOR (never round up): selling more than we hold is rejected by the
+    # exchange -> the exit silently fails and we stay long. Floor guarantees
+    # size <= held.
+    size = math.floor(pos.size * 100) / 100
     if 0 < price < 1 and size >= m.min_order_size:
         quotes.append(Quote(token_id, Side.SELL, price, size))

@@ -12,6 +12,7 @@ In-memory + typed, mirrored to SQLite on change so a crash-restart resumes.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import time
@@ -37,6 +38,10 @@ CREATE TABLE IF NOT EXISTS order_log (
     order_id  TEXT PRIMARY KEY,
     token_id  TEXT, side TEXT, price REAL, size REAL, state TEXT, ts REAL
 );
+CREATE TABLE IF NOT EXISTS pnl_snapshots (
+    ts        REAL PRIMARY KEY,
+    equity    REAL, net_cash REAL, inventory_value REAL, daily_pnl REAL
+);
 """
 
 
@@ -55,6 +60,7 @@ class StateStore:
         self.orders: dict[str, OpenOrder] = {}
         # token_id -> count of in-flight (MATCHED-not-CONFIRMED) trades; guards reconcile
         self._inflight: dict[str, int] = {}
+        self._inflight_ts: dict[str, float] = {}  # oldest in-flight mark, for expiry
         self._last_fill_ts: dict[str, float] = {}
         self._load()
 
@@ -124,13 +130,32 @@ class StateStore:
     # ── in-flight guard ─────────────────────────────────────────────────
     def mark_inflight(self, token_id: str) -> None:
         self._inflight[token_id] = self._inflight.get(token_id, 0) + 1
+        self._inflight_ts.setdefault(token_id, time.time())
 
     def clear_inflight(self, token_id: str) -> None:
         if self._inflight.get(token_id, 0) > 0:
             self._inflight[token_id] -= 1
+        if self._inflight.get(token_id, 0) == 0:
+            self._inflight_ts.pop(token_id, None)
 
     def inflight(self, token_id: str) -> int:
         return self._inflight.get(token_id, 0)
+
+    def expire_inflight(self, max_age_s: float) -> list[str]:
+        """Force-clear in-flight guards older than max_age_s.
+
+        A MATCHED whose CONFIRMED/FAILED never arrives (dropped WS event) would
+        otherwise block reconciliation for that token forever. Returns the
+        tokens cleared so the engine can force an authoritative REST reconcile.
+        """
+        now = time.time()
+        stale = [t for t, ts in self._inflight_ts.items() if now - ts > max_age_s]
+        for t in stale:
+            age = round(now - self._inflight_ts[t])
+            self._inflight[t] = 0
+            self._inflight_ts.pop(t, None)
+            log.warning("inflight_expired", token=t[:12], age_s=age)
+        return stale
 
     # ── orders ──────────────────────────────────────────────────────────
     def orders_for(self, token_id: str) -> list[OpenOrder]:
@@ -195,7 +220,28 @@ class StateStore:
                     row["token_id"], row["size"], row["avg_price"]
                 )
 
-    # ── reporting ───────────────────────────────────────────────────────
+    def force_set_position(self, token_id: str, size: float, avg_price: float, source: str) -> None:
+        """Overwrite a position unconditionally (used when on-chain is truth)."""
+        prev = self.positions.get(token_id)
+        self.set_position(token_id, size, avg_price)
+        log.warning("position_forced", token=token_id[:12], source=source,
+                    prev=round(prev.size, 2) if prev else 0.0, now=round(size, 2))
+
+    # ── maintenance / reporting ─────────────────────────────────────────
+    def checkpoint_wal(self) -> None:
+        """Truncate the WAL so it can't grow without bound under high volume."""
+        with contextlib.suppress(sqlite3.Error):
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def record_pnl(self, equity: float, net_cash: float, inv_value: float, daily_pnl: float) -> None:
+        with contextlib.suppress(sqlite3.Error):
+            self._conn.execute(
+                "INSERT OR REPLACE INTO pnl_snapshots(ts,equity,net_cash,inventory_value,daily_pnl)"
+                " VALUES(?,?,?,?,?)",
+                (time.time(), equity, net_cash, inv_value, daily_pnl),
+            )
+            self._conn.commit()
+
     def snapshot(self) -> dict[str, object]:
         return {
             "positions": {k: json.loads(_pos_json(v)) for k, v in self.positions.items() if v.size > 0},

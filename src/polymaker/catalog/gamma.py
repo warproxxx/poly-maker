@@ -39,6 +39,26 @@ class GammaClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def markets_by_condition(self, condition_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch current raw market dicts for specific condition ids (metadata
+        refresh: detect closed/not-accepting/resolved and updated end dates)."""
+        out: dict[str, dict[str, Any]] = {}
+        if not condition_ids:
+            return out
+        try:
+            r = await self._client.get(
+                "/markets",
+                params={"condition_ids": ",".join(condition_ids), "limit": len(condition_ids) + 5},
+            )
+            r.raise_for_status()
+            for m in r.json():
+                cid = m.get("conditionId")
+                if cid:
+                    out[cid] = m
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            log.warning("markets_by_condition_failed", err=str(exc))
+        return out
+
     async def resolve_tag_id(self, slug: str) -> str | None:
         try:
             r = await self._client.get(f"/tags/slug/{slug}")

@@ -7,6 +7,7 @@ file (state.db), queryable by the CLI. WAL mode so the running bot and a
 
 from __future__ import annotations
 
+import csv
 import json
 import sqlite3
 import time
@@ -98,6 +99,32 @@ class CatalogStore:
             sc = MarketScore(**json.loads(row["score_json"])) if row["score_json"] else score_market(meta)
             out.append((meta, sc))
         return out
+
+    def export_csv(self, path: str | Path, limit: int = 500) -> int:
+        """Write the scored catalog to a CSV for easy market picking.
+
+        Columns are chosen so you can eyeball reward/rebate income, cost (spread,
+        fee category), liquidity, and the exact slug/condition_id to paste into
+        markets.toml. Returns the number of rows written.
+        """
+        rows = self.top(limit)
+        fields = [
+            "score", "reward_per_day", "rebate_per_day", "spread", "best_bid", "best_ask",
+            "tick", "min_size", "neg_risk", "taker_fee_bps", "rewards_max_spread",
+            "liquidity", "volume", "end_date", "question", "slug", "condition_id",
+        ]
+        with open(path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(fields)
+            for m, sc in rows:
+                w.writerow([
+                    f"{sc.score:.3f}", f"{m.rewards_daily_rate:.2f}", f"{sc.rebate_potential:.2f}",
+                    f"{sc.spread:.4f}", m.best_bid, m.best_ask, f"{m.tick_size:g}",
+                    f"{m.min_order_size:g}", int(m.neg_risk), m.taker_fee_bps,
+                    m.rewards_max_spread, f"{m.liquidity_num:.0f}", f"{m.volume_num:.0f}",
+                    m.end_date_iso or "", m.question, m.slug, m.condition_id,
+                ])
+        return len(rows)
 
     def cache_tag(self, slug: str, tag_id: str) -> None:
         self._conn.execute(

@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import itertools
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
@@ -26,6 +28,8 @@ from polymaker.journal import Journal
 from polymaker.logging import get_logger
 
 log = get_logger("execution.gateway")
+
+_T = TypeVar("_T")
 
 
 def _tick_str(tick: float) -> str:
@@ -55,10 +59,26 @@ class ExecutionGateway:
         self._paper_ids = itertools.count(1)
         self._hb_id: str = ""  # heartbeat chain
         self._hb_failures: int = 0
+        # dedicated, bounded pool for blocking order/HTTP calls so a burst of
+        # requotes across many markets can't starve the default executor
+        self._pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="clob-io")
 
     @property
     def paper(self) -> bool:
         return self._paper
+
+    @property
+    def order_pressure(self) -> float:
+        """0 = plenty of order-post budget, 1 = about to queue (shed load)."""
+        return self._order_bucket.pressure
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+    async def _io(self, fn: Callable[..., _T], *args: Any) -> _T:
+        """Run a blocking client call on the dedicated pool."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._pool, fn, *args)
 
     @property
     def creds(self) -> Any:
@@ -94,6 +114,9 @@ class ExecutionGateway:
                 host=self._cfg.wallet.clob_host,
                 chain_id=self._cfg.wallet.chain_id,
                 key=sec.pk,
+                # use_server_time=False: fetching /time before EVERY signed order
+                # adds a full round-trip per op (latency killer through a proxy).
+                # We check clock drift once below and rely on the local (NTP) clock.
                 signature_type=self._cfg.wallet.signature_type,
                 funder=sec.browser_address,
             )
@@ -101,11 +124,27 @@ class ExecutionGateway:
             client.set_api_creds(creds)
             return client, creds, client.get_address()
 
-        self._client, self._creds, self._address = await asyncio.to_thread(_build)
+        self._client, self._creds, self._address = await self._io(_build)
+        await self._check_clock_drift()
         # funds/positions live on the funder (proxy/deposit wallet); fall back to EOA
         self._funder = sec.browser_address or self._address
         log.info("gateway_connected", signer=self._address[:10], funder=self._funder[:10],
                  paper=self._paper)
+
+    async def _check_clock_drift(self) -> None:
+        """Warn once if the local clock is skewed vs the exchange (affects L2 auth)."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.get(f"{self._cfg.wallet.clob_host}/time")
+                server = float(r.text.strip().strip('"'))
+            drift = abs(time.time() - server)
+            if drift > 5.0:
+                log.warning("clock_drift", drift_s=round(drift, 1),
+                            note="sync system clock (NTP) — large skew can fail order auth")
+            else:
+                log.info("clock_ok", drift_s=round(drift, 1))
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("clock_check_failed", err=str(exc))
 
     # ── placement ───────────────────────────────────────────────────────
     async def place(self, quotes: list[Quote], meta: MarketMeta) -> list[OpenOrder]:
@@ -138,7 +177,7 @@ class ExecutionGateway:
             return self._parse_place_response(resp, quotes)
 
         try:
-            return await asyncio.to_thread(_place)
+            return await self._io(_place)
         except Exception as exc:  # noqa: BLE001 - surface + continue; engine handles error rate
             log.error("place_failed", err=str(exc), n=len(quotes))
             return []
@@ -172,7 +211,7 @@ class ExecutionGateway:
             self._client.cancel_orders(order_ids)
 
         try:
-            await asyncio.to_thread(_cancel)
+            await self._io(_cancel)
             return True
         except Exception as exc:  # noqa: BLE001
             log.error("cancel_failed", err=str(exc), n=len(order_ids))
@@ -189,7 +228,7 @@ class ExecutionGateway:
             self._client.cancel_market_orders(OrderMarketCancelParams(asset_id=asset_id))
 
         try:
-            await asyncio.to_thread(_cancel)
+            await self._io(_cancel)
             return True
         except Exception as exc:  # noqa: BLE001
             log.error("cancel_asset_failed", err=str(exc), token=asset_id[:12])
@@ -198,7 +237,7 @@ class ExecutionGateway:
     async def cancel_all(self) -> None:
         if self._paper or self._client is None:
             return
-        await asyncio.to_thread(self._client.cancel_all)
+        await self._io(self._client.cancel_all)
         log.info("cancel_all_sent")
 
     # ── market (taker) orders — used by moneydoctor, NOT the maker strategy ──
@@ -232,7 +271,7 @@ class ExecutionGateway:
             except Exception as exc:  # noqa: BLE001 - surface as data, never crash the caller
                 return {"status": "failed", "error": str(exc)}
 
-        return await asyncio.to_thread(_do)
+        return await self._io(_do)
 
     async def get_book(self, token_id: str) -> dict[str, float]:
         """Live best bid/ask + touch depth for one token (public REST)."""
@@ -253,6 +292,24 @@ class ExecutionGateway:
         except (httpx.HTTPError, KeyError, ValueError) as exc:
             log.warning("get_book_failed", err=str(exc))
             return {}
+
+    async def get_full_book(
+        self, token_id: str
+    ) -> tuple[list[tuple[float, float]], list[tuple[float, float]], str | None] | None:
+        """Full L2 book (bids, asks, hash) via public REST — for periodic
+        integrity refresh against the WS book."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(f"{self._cfg.wallet.clob_host}/book",
+                                params={"token_id": token_id})
+                r.raise_for_status()
+                b = r.json()
+                bids = [(float(x["price"]), float(x["size"])) for x in b.get("bids", [])]
+                asks = [(float(x["price"]), float(x["size"])) for x in b.get("asks", [])]
+                return bids, asks, b.get("hash")
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            log.warning("get_full_book_failed", err=str(exc))
+            return None
 
     async def token_balance(self, token_id: str) -> float:
         """Exact on-chain conditional-token balance (shares) held by the funder.
@@ -291,9 +348,52 @@ class ExecutionGateway:
             return None
 
         try:
-            return await asyncio.to_thread(_read)
+            return await self._io(_read)
         except Exception as exc:  # noqa: BLE001
             log.warning("token_balance_failed", err=str(exc))
+            return None
+
+    async def token_balances(self, token_ids: list[str]) -> dict[str, float] | None:
+        """Batch on-chain balances for several tokens in one RPC session.
+
+        Used by the position-divergence monitor. Returns None on RPC failure.
+        """
+        if not token_ids:
+            return {}
+
+        def _read() -> dict[str, float] | None:
+            from web3 import Web3
+            from web3.middleware import ExtraDataToPOAMiddleware
+
+            configured = self._cfg.secrets.polygon_rpc or self._cfg.wallet.polygon_rpc
+            rpcs = [configured, "https://polygon-bor-rpc.publicnode.com",
+                    "https://polygon.llamarpc.com", "https://rpc.ankr.com/polygon"]
+            abi = [{"name": "balanceOf", "type": "function", "stateMutability": "view",
+                    "inputs": [{"name": "a", "type": "address"}, {"name": "id", "type": "uint256"}],
+                    "outputs": [{"name": "", "type": "uint256"}]}]
+            funder = None
+            for rpc in dict.fromkeys(rpcs):
+                try:
+                    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 20}))
+                    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+                    ctf = w3.eth.contract(
+                        address=Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"),
+                        abi=abi,
+                    )
+                    funder = Web3.to_checksum_address(self.funder)
+                    out: dict[str, float] = {}
+                    for tid in token_ids:
+                        raw = ctf.functions.balanceOf(funder, int(tid)).call()
+                        out[tid] = float(raw) / 1e6
+                    return out
+                except Exception:  # noqa: BLE001, PERF203
+                    continue
+            return None
+
+        try:
+            return await self._io(_read)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("token_balances_failed", err=str(exc))
             return None
 
     async def collateral_balance(self) -> float:
@@ -324,7 +424,7 @@ class ExecutionGateway:
             return self._client.post_heartbeat(self._hb_id)
 
         try:
-            resp = await asyncio.to_thread(_beat)
+            resp = await self._io(_beat)
             new_id = _first(resp, "heartbeat_id", "heartbeatId", "id")
             self._hb_id = str(new_id) if new_id else ""
             if self._hb_failures:
@@ -371,7 +471,7 @@ class ExecutionGateway:
             return out
 
         try:
-            return await asyncio.to_thread(_get)
+            return await self._io(_get)
         except Exception as exc:  # noqa: BLE001
             log.warning("open_orders_failed", err=str(exc))
             return []
@@ -411,7 +511,7 @@ class ExecutionGateway:
             return result
 
         try:
-            return await asyncio.to_thread(_get)
+            return await self._io(_get)
         except Exception as exc:  # noqa: BLE001
             log.warning("balance_allowance_failed", err=str(exc))
             return {}

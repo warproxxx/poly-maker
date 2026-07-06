@@ -1,0 +1,27 @@
+# Tiny, defensive profile for the live test — small size, quick to pull.
+[profiles.live-tiny]
+micro_levels        = 3
+flow_ewma_halflife_s = 90
+gamma               = 0.8
+delta_min_ticks     = 2
+c_vol               = 1.5
+c_tox               = 3.0
+vol_short_halflife_s = 10
+vol_long_halflife_s  = 600
+base_size_usdc      = 5.0
+q_max_usdc          = 12.0
+q_soft_frac         = 0.5
+layers              = 1
+layer_step_ticks    = 2
+reprice_ticks       = 2
+resize_frac         = 0.2
+min_edge_ticks      = 1
+event_cooloff_s     = 90
+event_jump_ticks    = 6
+event_sweep_levels  = 2
+trend_flow_z        = 1.2
+end_date_taper_days = 7
+reduce_only_hours   = 48
+halt_before_hours   = 6
+exit_urgency_s      = 600
+merge_min_size      = 20.0

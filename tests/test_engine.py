@@ -24,6 +24,7 @@ def _engine_with_market(tmp_path, meta) -> Engine:
     eng.est[cid] = Engine._make_estimators(eng.profiles[cid])
     eng.regime_m[cid] = RegimeMachine()
     eng._dirty[cid] = asyncio.Event()
+    eng._locks[cid] = asyncio.Lock()
     for tok in (meta.yes.token_id, meta.no.token_id):
         eng._token_cid[tok] = cid
     eng.md.set_markets([(cid, [meta.yes.token_id, meta.no.token_id])])
