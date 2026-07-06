@@ -31,6 +31,10 @@ class WalletConfig(BaseModel):
 
 class EngineConfig(BaseModel):
     debounce_ms: int = 200
+    # baseline periodic re-quote (book reactions are event-driven & instant; this
+    # is just a slow refresh for cool-off re-entry / exit-urgency updates). A
+    # precise wake is also scheduled for the exact moment an EVENT cool-off ends.
+    quoter_tick_s: float = 60.0
     reconcile_interval_s: float = 30.0
     catalog_refresh_s: float = 900.0
     heartbeat: bool = True
@@ -86,6 +90,9 @@ class StrategyProfile(BaseModel):
     q_soft_frac: float = 0.6
     layers: int = 2
     layer_step_ticks: int = 2
+    # multiplier on the market's reward min-size that reward-eligible orders are
+    # bumped to (margin above the scoring floor). 1.5 => 100-share min -> 150.
+    reward_size_mult: float = 1.0
     # placement / churn
     reprice_ticks: int = 2
     resize_frac: float = 0.15
@@ -94,7 +101,15 @@ class StrategyProfile(BaseModel):
     event_cooloff_s: float = 60.0
     event_jump_ticks: int = 8
     event_sweep_levels: int = 3
+    # sweep = a print >= event_sweep_mult order-sizes AND >= event_sweep_frac of
+    # the near-touch depth it consumed (both must hold to flag a toxic sweep)
+    event_sweep_mult: float = 4.0
+    event_sweep_frac: float = 0.8
     trend_flow_z: float = 1.5
+    # short/long realized-vol ratio that trips TRENDING (half size). On a thin
+    # book microprice jitter inflates this without real trade flow, so raise it
+    # for reward-farming markets that trade rarely.
+    trend_vol_ratio: float = 2.0
     # lifecycle
     end_date_taper_days: float = 7.0
     reduce_only_hours: float = 24.0

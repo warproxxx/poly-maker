@@ -89,9 +89,20 @@ class CatalogStore:
         ).fetchone()
         return _load_meta(row["meta_json"]) if row else None
 
-    def top(self, limit: int = 50) -> list[tuple[MarketMeta, MarketScore]]:
+    def top(self, limit: int = 50, fresh_s: float = 3600.0) -> list[tuple[MarketMeta, MarketScore]]:
+        """Top markets by score, restricted to the most recent scan.
+
+        The markets table accumulates rows across scans; without a freshness gate
+        a stale row (scored by an older formula, or a market that has since
+        resolved / dropped out of the tag) can surface at the top. We keep only
+        rows scanned within `fresh_s` of the newest row.
+        """
+        newest = self._conn.execute("SELECT MAX(scanned_ts) AS t FROM markets").fetchone()
+        cutoff = (newest["t"] or 0.0) - fresh_s
         rows = self._conn.execute(
-            "SELECT meta_json, score_json FROM markets ORDER BY score DESC LIMIT ?", (limit,)
+            "SELECT meta_json, score_json FROM markets WHERE scanned_ts >= ? "
+            "ORDER BY score DESC LIMIT ?",
+            (cutoff, limit),
         ).fetchall()
         out = []
         for row in rows:
@@ -109,9 +120,10 @@ class CatalogStore:
         """
         rows = self.top(limit)
         fields = [
-            "score", "reward_per_day", "rebate_per_day", "spread", "best_bid", "best_ask",
-            "tick", "min_size", "neg_risk", "taker_fee_bps", "rewards_max_spread",
-            "liquidity", "volume", "end_date", "question", "slug", "condition_id",
+            "score", "reward_pool_per_day", "rebate_pool_per_day", "spread",
+            "best_bid", "best_ask", "tick", "min_size", "neg_risk", "taker_fee_pct",
+            "rebate_pct", "rewards_max_spread", "liquidity", "volume_24h",
+            "end_date", "question", "slug", "condition_id",
         ]
         with open(path, "w", newline="") as fh:
             w = csv.writer(fh)
@@ -120,9 +132,9 @@ class CatalogStore:
                 w.writerow([
                     f"{sc.score:.3f}", f"{m.rewards_daily_rate:.2f}", f"{sc.rebate_potential:.2f}",
                     f"{sc.spread:.4f}", m.best_bid, m.best_ask, f"{m.tick_size:g}",
-                    f"{m.min_order_size:g}", int(m.neg_risk), m.taker_fee_bps,
-                    m.rewards_max_spread, f"{m.liquidity_num:.0f}", f"{m.volume_num:.0f}",
-                    m.end_date_iso or "", m.question, m.slug, m.condition_id,
+                    f"{m.min_order_size:g}", int(m.neg_risk), f"{m.taker_fee_bps / 100:.1f}",
+                    f"{m.rebate_rate * 100:.0f}", m.rewards_max_spread, f"{m.liquidity_num:.0f}",
+                    f"{m.volume_24hr:.0f}", m.end_date_iso or "", m.question, m.slug, m.condition_id,
                 ])
         return len(rows)
 

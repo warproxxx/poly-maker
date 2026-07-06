@@ -63,7 +63,7 @@ class RegimeMachine:
             return Regime.REDUCE_ONLY
 
         # 4. trending
-        if abs(inp.flow_z) >= p.trend_flow_z or inp.vol_ratio >= 2.0:
+        if abs(inp.flow_z) >= p.trend_flow_z or inp.vol_ratio >= p.trend_vol_ratio:
             return Regime.TRENDING
 
         # 5. default
@@ -72,3 +72,7 @@ class RegimeMachine:
     @property
     def in_cooloff(self) -> bool:
         return self._event_until > 0.0
+
+    def cooloff_remaining(self, now: float) -> float:
+        """Seconds until the EVENT cool-off expires (0 if not cooling off)."""
+        return max(0.0, self._event_until - now)

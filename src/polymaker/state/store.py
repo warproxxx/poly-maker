@@ -220,6 +220,20 @@ class StateStore:
                     row["token_id"], row["size"], row["avg_price"]
                 )
 
+    def drop_untracked_positions(self, tracked: set[str]) -> list[str]:
+        """Remove positions for tokens we don't trade (e.g. the operator's manual
+        UI bets that leaked in via an earlier unscoped reconcile). They must not
+        count toward exposure caps or PnL. Returns the dropped token ids."""
+        dropped = [t for t in self.positions if t not in tracked]
+        for t in dropped:
+            self.positions.pop(t, None)
+            with contextlib.suppress(sqlite3.Error):
+                self._conn.execute("DELETE FROM positions WHERE token_id=?", (t,))
+        if dropped:
+            self._conn.commit()
+            log.info("untracked_positions_dropped", n=len(dropped))
+        return dropped
+
     def force_set_position(self, token_id: str, size: float, avg_price: float, source: str) -> None:
         """Overwrite a position unconditionally (used when on-chain is truth)."""
         prev = self.positions.get(token_id)

@@ -20,7 +20,7 @@ from polymaker.alerts import Alerter
 from polymaker.catalog.gamma import GammaClient, fetch_reward_rates, parse_market
 from polymaker.catalog.store import CatalogStore
 from polymaker.config import Config, StrategyProfile
-from polymaker.domain import Fill, MarketMeta, Regime
+from polymaker.domain import Fill, MarketMeta, Regime, Side
 from polymaker.execution.gateway import ExecutionGateway
 from polymaker.execution.reconciler import reconcile
 from polymaker.journal import Journal
@@ -94,6 +94,9 @@ class Engine:
         await self._resolve_markets()
         if not self.metas:
             log.warning("no_markets_selected", hint="add markets to config/markets.toml, run `polymaker scan`")
+        # freshen reward/fee/end-date params from live Gamma BEFORE quoting so a
+        # stale catalog (e.g. old reward min-size) can't mis-size our orders
+        await self.refresh_market_metadata()
         await self._startup_reconcile()
 
         # subscribe feeds
@@ -237,10 +240,19 @@ class Engine:
                     log.error("startup_orders_stuck", n=len(still))
                     self.alerter.alert("startup_orders_stuck",
                                        f"{len(still)} orders survived cancel-all", critical=True)
-        positions = await self.gateway.positions()
+        # purge positions that leaked in for markets we don't trade (manual UI
+        # bets etc.) so they can't distort exposure caps or PnL
+        self.state.drop_untracked_positions(set(self._token_cid))
+        positions = self._only_traded(await self.gateway.positions())
         if positions:
             self.state.reconcile_positions(positions)
             log.info("startup_positions", n=len(positions))
+
+    def _only_traded(self, positions: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
+        """Scope account positions to tokens WE trade. Manual/UI positions in
+        other markets are the operator's business — they must not enter our
+        state, exposure caps, or PnL."""
+        return {t: v for t, v in positions.items() if t in self._token_cid}
 
     # ── callbacks ───────────────────────────────────────────────────────
     def _on_dirty(self, condition_id: str, token_id: str) -> None:
@@ -267,10 +279,29 @@ class Engine:
         cid = self._token_cid.get(tp.asset_id)
         if cid is None:
             return
+        p = self.profiles[cid]
         self.est[cid].flow.update(tp.aggressor, tp.size, tp.ts)
-        # crude sweep flag: a single print larger than 3x base size
-        base = self.profiles[cid].base_size_usdc / max(tp.price, 0.01)
-        if tp.size >= 3 * base:
+        # A trade only flags a SWEEP (-> pull quotes) if it's genuinely toxic:
+        # large in absolute terms AND large relative to the resting depth it
+        # consumed (i.e. it actually ate through the book). A big trade absorbed
+        # by a deep book doesn't move the price and isn't toxic — for a liquid
+        # market the FV-jump detector is the real event signal. event_sweep_mult
+        # sets how many order-sizes big the print must be to even be considered.
+        base = p.base_size_usdc / max(tp.price, 0.01)
+        if tp.size < p.event_sweep_mult * base:
+            return
+        book = self.md.book(tp.asset_id)
+        if book is None:
+            return
+        bb, ba = book.best_bid(), book.best_ask()
+        if bb is None or ba is None:
+            return
+        # aggressor BUY lifts asks; SELL hits bids — measure the side it consumed
+        if tp.aggressor is Side.BUY:
+            consumed = book.depth_within(Side.SELL, ba.price, ba.price + 3 * book.tick_size)
+        else:
+            consumed = book.depth_within(Side.BUY, bb.price - 3 * book.tick_size, bb.price)
+        if consumed > 0 and tp.size >= p.event_sweep_frac * consumed:
             self._sweep[cid] = True
 
     def _on_fill(self, fill: Fill) -> None:
@@ -286,11 +317,20 @@ class Engine:
     # ── quoter ──────────────────────────────────────────────────────────
     async def _quoter(self, cid: str) -> None:
         debounce = self.cfg.engine.debounce_ms / 1000.0
+        base_tick = self.cfg.engine.quoter_tick_s
         ev = self._dirty[cid]
         while self._running:
             try:
-                await ev.wait()
-                await asyncio.sleep(debounce)  # coalesce a burst of book updates
+                # Book/fill events wake us instantly. Otherwise we refresh on a
+                # slow baseline tick, EXCEPT: if an EVENT cool-off is active,
+                # wake precisely when it ends (re-enter promptly, not up to a
+                # minute late); if we're holding inventory, tick faster to walk
+                # exit urgency.
+                timeout = self._next_wake_s(cid, base_tick)
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(ev.wait(), timeout=timeout)
+                if ev.is_set():
+                    await asyncio.sleep(debounce)  # coalesce a burst of updates
                 ev.clear()
                 await self._recompute(cid)
             except asyncio.CancelledError:
@@ -298,6 +338,21 @@ class Engine:
             except Exception as exc:  # noqa: BLE001
                 log.error("quoter_error", cid=cid[:8], err=str(exc))
                 await asyncio.sleep(0.5)
+
+    def _next_wake_s(self, cid: str, base_tick: float) -> float:
+        now = time.time()
+        wake = base_tick
+        rm = self.regime_m.get(cid)
+        if rm is not None:
+            cd = rm.cooloff_remaining(now)
+            if cd > 0:
+                wake = min(wake, cd + 0.5)  # re-enter right when cool-off ends
+        meta = self.metas.get(cid)
+        if meta is not None:  # holding inventory -> tick faster to manage exits
+            held = self.state.position(meta.yes.token_id).size + self.state.position(meta.no.token_id).size
+            if held >= meta.min_order_size:
+                wake = min(wake, 10.0)
+        return max(1.0, wake)
 
     async def _recompute(self, cid: str) -> None:
         lock = self._locks.get(cid)
@@ -338,9 +393,15 @@ class Engine:
         inv_util = abs(pos_yes.size - pos_no.size) * fv / q_max if q_max > 0 else 0.0
         hours_to_end = _hours_to_end(meta.end_date_iso, now)
 
-        # ── blind/stale conditions: all use LOCAL receive time (skew-proof) ──
+        # ── blind/stale conditions ──────────────────────────────────────────
+        # A QUIET market with a live WS link is NOT stale — the CLOB WS pings
+        # every 5s (pong-timeout 10s), so a dead link flips `connected` within
+        # ~15s. Gating on the connection (not book-mutation recency) stops a
+        # legitimately-quiet thin market from false-halting into zero rewards.
         market_stale = (
-            (now - self.md.last_local_ts(meta.yes.token_id)) > self.cfg.risk.ws_stale_halt_s
+            not self.md.connected
+            and self.md.disconnected_since > 0.0
+            and (now - self.md.disconnected_since) > self.cfg.risk.ws_stale_halt_s
         )
         user_blind = (
             self._user_started
@@ -436,7 +497,8 @@ class Engine:
         self._last_quote_fv[cid] = fv
         log.info("requote", cid=cid[:8], regime=regime.value, fv=round(fv, 4),
                  place=placed_n, cancel=len(plan.to_cancel),
-                 pos_yes=round(pos_yes.size, 1), pos_no=round(pos_no.size, 1))
+                 pos_yes=round(pos_yes.size, 1), pos_no=round(pos_no.size, 1),
+                 tox=round(est.markout.toxicity, 3), flowz=round(est.flow.z, 2))
         self._maybe_merge(cid, meta, p, pos_yes.size, pos_no.size)
 
     async def _quarantine(self, meta: MarketMeta, reason: str) -> None:
@@ -526,7 +588,7 @@ class Engine:
                     self.alerter.alert("inflight_expired",
                                        f"{len(expired)} stuck in-flight guards cleared")
 
-                positions = await self.gateway.positions()
+                positions = self._only_traded(await self.gateway.positions())
                 if positions:
                     self.state.reconcile_positions(positions)
                 live = await self.gateway.open_orders()
@@ -587,44 +649,67 @@ class Engine:
                 if cid:
                     self._wake_cid(cid)
 
-    async def _metadata_refresh_loop(self) -> None:
-        """Refresh market metadata from Gamma: halt markets that have closed /
-        resolved / stopped accepting orders, and pick up updated end dates."""
+    async def refresh_market_metadata(self) -> None:
+        """Pull fresh metadata from Gamma for all traded markets: halt on
+        closed/not-accepting, and freshen reward/fee/end-date params so we quote
+        at the CURRENT reward minimum, band, and fees (these change over time —
+        e.g. the reward min-size jumping 50->100 shares). Called at startup and
+        periodically. Safe to await."""
+        if not self.metas:
+            return
+        try:
+            async with GammaClient(self.cfg.wallet.gamma_host) as gamma:
+                raws = await gamma.markets_by_condition(list(self.metas))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("metadata_refresh_error", err=str(exc))
+            return
+        for cid, raw in raws.items():
+            if cid not in self.metas:
+                continue
+            accepting = bool(raw.get("acceptingOrders", True))
+            closed = bool(raw.get("closed", False))
+            if closed or not accepting:
+                if cid not in self._halted:
+                    self._halted.add(cid)
+                    log.critical("market_halted_by_meta", cid=cid[:8], closed=closed,
+                                 accepting=accepting)
+                    self.alerter.alert(f"halted:{cid[:8]}",
+                                       f"{self.metas[cid].question[:40]} closed/not-accepting",
+                                       critical=True)
+                    meta = self.metas[cid]
+                    for tok in (meta.yes.token_id, meta.no.token_id):
+                        with contextlib.suppress(Exception):
+                            await self.gateway.cancel_asset(tok)
+                    self._wake_cid(cid)
+                continue
+            self._halted.discard(cid)
+            self._apply_meta_refresh(cid, raw)
+
+    def _apply_meta_refresh(self, cid: str, raw: dict[str, Any]) -> None:
         import dataclasses
 
+        old = self.metas[cid]
+        fee = raw.get("feeSchedule") or {}
+        rate = _fnum(fee.get("rate"))
+        candidates: dict[str, Any] = {
+            "rewards_min_size": _fnum(raw.get("rewardsMinSize")),
+            "rewards_max_spread": _fnum(raw.get("rewardsMaxSpread")),
+            "taker_fee_bps": int(round(rate * 10000)) if rate is not None else None,
+            "rebate_rate": _fnum(fee.get("rebateRate")),
+            "end_date_iso": raw.get("endDate"),
+            "min_order_size": _fnum(raw.get("orderMinSize")),
+        }
+        updates = {k: v for k, v in candidates.items()
+                   if v is not None and getattr(old, k) != v}
+        if updates:
+            self.metas[cid] = dataclasses.replace(old, **updates)
+            log.info("meta_refreshed", cid=cid[:8], **updates)
+            self._wake_cid(cid)
+
+    async def _metadata_refresh_loop(self) -> None:
         while self._running:
             await asyncio.sleep(self.cfg.engine.catalog_refresh_s)
-            if not self.metas:
-                continue
-            try:
-                async with GammaClient(self.cfg.wallet.gamma_host) as gamma:
-                    raws = await gamma.markets_by_condition(list(self.metas))
-            except Exception as exc:  # noqa: BLE001
-                log.warning("metadata_refresh_error", err=str(exc))
-                continue
-            for cid, raw in raws.items():
-                if cid not in self.metas:
-                    continue
-                accepting = bool(raw.get("acceptingOrders", True))
-                closed = bool(raw.get("closed", False))
-                if closed or not accepting:
-                    if cid not in self._halted:
-                        self._halted.add(cid)
-                        log.critical("market_halted_by_meta", cid=cid[:8], closed=closed,
-                                     accepting=accepting)
-                        self.alerter.alert(f"halted:{cid[:8]}",
-                                           f"{self.metas[cid].question[:40]} closed/not-accepting",
-                                           critical=True)
-                        meta = self.metas[cid]
-                        for tok in (meta.yes.token_id, meta.no.token_id):
-                            with contextlib.suppress(Exception):
-                                await self.gateway.cancel_asset(tok)
-                        self._wake_cid(cid)
-                else:
-                    self._halted.discard(cid)
-                    new_end = raw.get("endDate")
-                    if new_end and new_end != self.metas[cid].end_date_iso:
-                        self.metas[cid] = dataclasses.replace(self.metas[cid], end_date_iso=new_end)
+            await self.refresh_market_metadata()
 
     async def _maintenance_loop(self) -> None:
         """Periodic REST book refresh to catch any silently-missed WS deltas."""
@@ -681,12 +766,26 @@ class Engine:
         return cost
 
 
+def _fnum(v: object) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return None
+
+
 def _hours_to_end(end_date_iso: str | None, now: float) -> float | None:
     if not end_date_iso:
         return None
     try:
         dt = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
-        return max(0.0, (dt.timestamp() - now) / 3600.0)
+        hrs = (dt.timestamp() - now) / 3600.0
+        # A past end date on a still-trading market is a stale/placeholder date
+        # (common for "next X" appointment markets) — treat as unknown so we
+        # don't wrongly HALT. The true end is signalled by acceptingOrders=False,
+        # which the metadata refresh already halts on.
+        return hrs if hrs > 0.0 else None
     except (ValueError, TypeError):
         return None
 

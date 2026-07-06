@@ -21,19 +21,20 @@ data_api_host = "https://data-api.polymarket.com"
 polygon_rpc = "https://polygon-bor-rpc.publicnode.com"
 
 [engine]
-debounce_ms = 200               # min gap between quote recomputes per market
-reconcile_interval_s = 30       # REST drift reconciliation cadence
-catalog_refresh_s = 900         # market catalog rescan cadence (15 min)
+debounce_ms = 250               # min gap between quote recomputes per market
+quoter_tick_s = 60              # slow baseline refresh (reactions are event-driven); cool-off re-entry is precise
+reconcile_interval_s = 20       # REST drift reconciliation cadence
+catalog_refresh_s = 300         # market catalog rescan cadence (15 min)
 heartbeat = true                # exchange dead-man switch
 heartbeat_interval_s = 5
 journal = true                  # append raw WS/orders to journal/ for backtest
 loop = "uvloop"                 # "uvloop" | "asyncio"
 
 [risk]
-max_total_exposure_usdc = 5000.0     # sum of |position notional| + open buy notional
-max_event_group_loss_usdc = 1000.0   # neg-risk group worst-case loss cap
-max_market_notional_usdc = 800.0     # per-market position+orders notional cap
-daily_loss_kill_usdc = 250.0         # realized daily loss -> halt new quotes
+max_total_exposure_usdc = 450.0     # sum of |position notional| + open buy notional
+max_event_group_loss_usdc = 400.0   # neg-risk group worst-case loss cap
+max_market_notional_usdc = 400.0     # per-market position+orders notional cap
+daily_loss_kill_usdc = 40.0         # realized daily loss -> halt new quotes
 ws_stale_halt_s = 10.0               # no book updates for this long -> halt market
 user_ws_blind_halt_s = 15.0          # user WS down this long -> pull all quotes (can't see fills)
 heartbeat_halt_failures = 3          # consecutive heartbeat misses -> halt + resync

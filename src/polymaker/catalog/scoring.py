@@ -44,15 +44,25 @@ def reward_density(m: MarketMeta, quote_size_usdc: float = 100.0) -> float:
 
 
 def rebate_potential(m: MarketMeta) -> float:
-    """Est. daily maker-rebate pool: taker_fee_rate * rebate_rate * daily volume."""
+    """Estimated daily maker-rebate POOL for the market, using the exact V2 fee
+    formula (per-market rate + rebate rate, no hardcoding).
+
+    Per-share taker fee = fee_rate * p*(1-p)  (py_clob_client_v2/fees.py).
+    Daily taker shares ~ vol_24h / mid, so:
+        daily fees   = (vol/mid) * fee_rate * mid*(1-mid) = vol * fee_rate * (1-mid)
+        rebate pool  = daily fees * rebate_rate
+    This is the whole-market pool; your take is (your maker-fill share) x pool.
+    It's a trailing-volume estimate — actual depends on future flow + fill share.
+    """
     if not m.fees_enabled or m.rebate_rate <= 0 or m.taker_fee_bps <= 0:
         return 0.0
-    daily_vol = m.volume_num  # best proxy available from catalog; refined live
-    taker_rate = m.taker_fee_bps / 10000.0
-    # taker fee peaks at p*(1-p); use mid as the representative point
+    vol24 = m.volume_24hr
+    if vol24 <= 0:
+        return 0.0
+    fee_rate = m.taker_fee_bps / 10000.0
     mid = _mid(m)
-    fee_factor = mid * (1.0 - mid)
-    return daily_vol * taker_rate * fee_factor * m.rebate_rate * 0.01  # 1% daily-vol proxy
+    daily_fees = vol24 * fee_rate * (1.0 - mid)
+    return round(daily_fees * m.rebate_rate, 2)
 
 
 def extremity(m: MarketMeta) -> float:
@@ -62,19 +72,25 @@ def extremity(m: MarketMeta) -> float:
 
 
 def score_market(m: MarketMeta) -> MarketScore:
-    rd = reward_density(m)
-    rp = rebate_potential(m)
+    rd = reward_density(m)  # our estimated reward income (share-adjusted)
+    rp = rebate_potential(m)  # total daily rebate POOL (for display)
     ext = extremity(m)
     spread = max(0.0, m.best_ask - m.best_bid) if (m.best_bid and m.best_ask) else 1.0
 
-    # income terms are additive; extremity and wide spreads discount the score
-    income = rd + rp
+    # our estimated income = reward share + (rebate pool * our fill/liquidity share);
+    # extremity and wide spreads discount the score
+    ref = 100.0
+    our_share = min(0.5, ref / max(m.liquidity_num, ref))  # you won't own a whole pool
+    income = rd + rp * our_share
     penalty = (1.0 - 0.5 * ext) * (1.0 / (1.0 + spread * 20.0))
+    # viability: a market needs real book depth to actually quote — otherwise a
+    # near-zero-liquidity market games "our share" to the top of the ranking
+    viability = min(1.0, m.liquidity_num / 2000.0)
     return MarketScore(
         condition_id=m.condition_id,
         reward_density=round(rd, 3),
-        rebate_potential=round(rp, 3),
+        rebate_potential=round(rp, 3),  # the market's total daily rebate pool
         spread=round(spread, 4),
         extremity=round(ext, 3),
-        score=round(income * penalty, 4),
+        score=round(income * penalty * viability, 4),
     )

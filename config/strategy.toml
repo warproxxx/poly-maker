@@ -1,66 +1,87 @@
-# Named strategy parameter profiles (replaces the v1 Hyperparameters sheet).
-# markets.toml maps each market to one of these profiles.
-# See the README.
+# Strategy profiles. `newsom-mm` is tuned for the Gavin Newsom 2028 Dem-nomination
+# market from a live microstructure sample (2026-07-06): price ~0.195, tick 0.001,
+# 2-tick spread, thin touch (~$20-250), VERY quiet tape (~0.1 trades/min),
+# rewards: min 100 shares/order, 5.5c band, ~$52/day rate, 25% maker-rebate pool.
 
-[profiles.political-longdated]
+[profiles.newsom-mm]
 # --- fair value ---
-micro_levels        = 3       # depth levels used for microprice
-flow_ewma_halflife_s = 120    # signed-flow EWMA half-life
+micro_levels        = 3
+flow_ewma_halflife_s = 120
 # --- spread / skew ---
-gamma               = 0.5     # inventory risk aversion (skew strength)
-delta_min_ticks     = 2       # minimum half-spread, in ticks
-c_vol               = 1.2     # half-spread added per unit short-horizon vol
-c_tox               = 2.0     # half-spread added per unit toxicity score
-# --- vol horizons (seconds) ---
+gamma               = 0.6     # inventory skew; sized so full cap leans ~1-2 ticks
+delta_min_ticks     = 2       # half-spread floor = 2 ticks (market spread is 2)
+c_vol               = 1.5
+c_tox               = 3.0
+# --- vol horizons ---
 vol_short_halflife_s = 10
 vol_long_halflife_s  = 900
-# --- sizing / inventory ---
-base_size_usdc      = 50.0    # notional per quote
-q_max_usdc          = 500.0   # hard inventory cap (notional)
-q_soft_frac         = 0.6     # soft cap as fraction of q_max
-layers              = 2       # price levels per side
-layer_step_ticks    = 2       # tick gap between layers
+# --- sizing / inventory ($50 orders, $200 net max position) ---
+base_size_usdc      = 100.0   # per token side, split into `layers` orders
+q_max_usdc          = 200.0   # NET directional cap (YES minus NO exposure)
+q_soft_frac         = 0.6     # stop adding at net $120, exits get urgent
+layers              = 2       # 2 x $50 YES orders; NO auto-sizes to reward floor
+reward_size_mult    = 1.5     # bump reward-eligible orders to 1.5x the min (100 -> 150 sh)
+layer_step_ticks    = 2
 # --- placement / churn ---
-reprice_ticks       = 2       # only reprice if target moves this many ticks
-resize_frac         = 0.15    # or if size drifts this fraction
-min_edge_ticks      = 1       # never quote inside (FV +/- this) * tick
-# --- regime ---
-event_cooloff_s     = 60
-event_jump_ticks    = 8       # FV jump over debounce that flags EVENT
-event_sweep_levels  = 3       # levels consumed in one print that flags EVENT
-trend_flow_z        = 1.5     # flow z-score that flags TRENDING
-# --- lifecycle ---
+reprice_ticks       = 2       # ignore 1-tick FV flicker (hold queue position)
+resize_frac         = 0.2
+min_edge_ticks      = 1       # never bid above FV - 1 tick
+# --- regime (damped for a quiet tape: one 250-share print must not flap us) ---
+event_cooloff_s     = 30      # shorter: this is a deep, slow market
+event_jump_ticks    = 6       # 0.006 = ~3% jump -> pull quotes
+event_sweep_mult    = 6.0     # print must be >=6 order-sizes
+event_sweep_frac    = 1.0     # AND consume ~all near-touch depth to count as a sweep
+trend_flow_z        = 1.8
+# --- lifecycle (resolves 2028 — irrelevant here) ---
 end_date_taper_days = 7
 reduce_only_hours   = 24
 halt_before_hours   = 2
 # --- exits ---
-exit_urgency_s      = 900     # time to walk exit from FV+delta to best-bid+tick
-merge_min_size      = 20.0    # min(YES,NO) shares to trigger a merge
+exit_urgency_s      = 900
+merge_min_size      = 20.0
 
-[profiles.political-hot]
-# tighter, defensive profile for high-volatility / event-prone markets
+
+# romania-pm: "Next PM of Romania" — Alexandru Nazare leg. Live sample 2026-07-06:
+# price ~0.487/0.488 (near 50/50 -> max reward score, low extremity), tick 0.001,
+# 1-tick spread, ~$4k/day tape, rewards: min 50 shares/order, 4.5c band, ~$257/day
+# rate, 25% rebate. endDate is stale (past) but still accepting -> handled as no-end.
+[profiles.romania-pm]
 micro_levels        = 3
-flow_ewma_halflife_s = 60
-gamma               = 0.9
-delta_min_ticks     = 3
-c_vol               = 1.8
+flow_ewma_halflife_s = 120
+# --- spread / skew ---
+gamma               = 0.6
+delta_min_ticks     = 1       # tight market (1-tick spread); quote close to score
+c_vol               = 1.5
 c_tox               = 3.0
-vol_short_halflife_s = 8
-vol_long_halflife_s  = 600
-base_size_usdc      = 30.0
-q_max_usdc          = 250.0
-q_soft_frac         = 0.5
-layers              = 2
-layer_step_ticks    = 3
-reprice_ticks       = 2
-resize_frac         = 0.15
+# --- vol horizons ---
+vol_short_halflife_s = 10
+vol_long_halflife_s  = 900
+# --- sizing / inventory (MINIMUM reward size — thin/gap-prone book, so a fill
+#     must be small & disposable, not a directional bag. Reward < max, on purpose) ---
+base_size_usdc      = 22.0    # ~50 sh at these prices = the reward MIN, nothing more
+q_max_usdc          = 100.0   # ceiling (min-size orders make accumulation slow anyway)
+q_soft_frac         = 0.6
+layers              = 1
+reward_size_mult    = 1.0     # floor each order to exactly the 50-share reward min
+layer_step_ticks    = 2
+# --- placement / churn (STICKY: thin/noisy tape must not flap us out of the
+#     reward queue; we reprice only on real moves, not microprice jitter) ---
+reprice_ticks       = 3       # ignore <=3-tick FV jitter (hold queue position)
+resize_frac         = 0.6     # don't cancel/replace on a regime size-flip (154<->77)
 min_edge_ticks      = 1
-event_cooloff_s     = 120
-event_jump_ticks    = 6
-event_sweep_levels  = 2
-trend_flow_z        = 1.2
+# --- regime: rest through noise (high trend threshold) but pull HARD on a real
+#     sweep/jump, since the gapped book makes a toxic fill costly ---
+event_cooloff_s     = 30
+event_jump_ticks    = 5       # 0.005 jump from a thin book -> pull (gap protection)
+event_sweep_mult    = 3.0     # thinner book: a smaller print is a real sweep here
+event_sweep_frac    = 0.8     # consuming ~80% of near-touch depth counts
+trend_flow_z        = 2.6     # noisy flow z on a $4k/day tape -> raise the bar
+trend_vol_ratio     = 5.0     # ~1 trade/hr: microprice jitter must NOT halve size
+                              # (real gaps still caught by event_jump_ticks)
+# --- lifecycle (end date stale/None -> these are inert; acceptingOrders governs) ---
 end_date_taper_days = 7
 reduce_only_hours   = 24
 halt_before_hours   = 2
-exit_urgency_s      = 600
+# --- exits ---
+exit_urgency_s      = 900
 merge_min_size      = 20.0

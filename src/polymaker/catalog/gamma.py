@@ -103,6 +103,11 @@ class GammaClient:
                 params["volume_num_min"] = min_volume_24hr
 
             r = await self._client.get("/markets", params=params)
+            # Gamma returns 422 (not an empty page) once the offset runs past the
+            # last result — treat that as the natural end of pagination.
+            if r.status_code in (400, 422):
+                log.info("pagination_end", offset=offset, status=r.status_code)
+                return
             r.raise_for_status()
             batch = r.json()
             if not batch:
@@ -158,6 +163,9 @@ def parse_market(raw: dict[str, Any], reward_rates: dict[str, float] | None = No
             best_ask=float(raw.get("bestAsk", 0) or 0),
             liquidity_num=float(raw.get("liquidityNum", 0) or 0),
             volume_num=float(raw.get("volumeNum", 0) or 0),
+            # prefer CLOB 24h volume (the taker flow that generates fees);
+            # fall back to total 24h volume
+            volume_24hr=float(raw.get("volume24hrClob") or raw.get("volume24hr") or 0),
         )
     except (KeyError, ValueError, TypeError) as exc:
         log.warning("parse_market_failed", err=str(exc), slug=raw.get("slug"))

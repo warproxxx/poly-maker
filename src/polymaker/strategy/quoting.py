@@ -74,6 +74,7 @@ def construct_quotes(inp: QuoteInputs) -> TargetQuotes:
     net_shares = inp.pos_yes.size - inp.pos_no.size
     q_max_shares = p.q_max_usdc / max(inp.fv, tick)
     u = _clamp(net_shares / q_max_shares, -1.0, 1.0) if q_max_shares > 0 else 0.0
+    reward_floor = m.rewards_min_size * p.reward_size_mult  # scoring size w/ margin
 
     skew = p.gamma * inp.vol_short * u
 
@@ -104,7 +105,8 @@ def construct_quotes(inp: QuoteInputs) -> TargetQuotes:
         if price is not None:
             _add_layers(quotes, m.yes.token_id, Side.BUY, price, tick, dec,
                         _size_shares(p.base_size_usdc, price, common_scale * (1 - max(u, 0.0)), m),
-                        p.layers, p.layer_step_ticks, down=True)
+                        p.layers, p.layer_step_ticks, down=True,
+                        exchange_min=m.min_order_size, reward_floor=reward_floor)
 
     # entry: BUY NO
     if add_no:
@@ -113,7 +115,8 @@ def construct_quotes(inp: QuoteInputs) -> TargetQuotes:
         if price is not None:
             _add_layers(quotes, m.no.token_id, Side.BUY, price, tick, dec,
                         _size_shares(p.base_size_usdc, price, common_scale * (1 - max(-u, 0.0)), m),
-                        p.layers, p.layer_step_ticks, down=True)
+                        p.layers, p.layer_step_ticks, down=True,
+                        exchange_min=m.min_order_size, reward_floor=reward_floor)
 
     # ── exits: SELL held inventory (maker, never cross) ─────────────────
     _maybe_exit(quotes, m.yes.token_id, inp.pos_yes, inp.fv, delta, inp.yes_view, tick, dec,
@@ -151,34 +154,44 @@ def _place_bid(
 
 
 def _size_shares(base_usdc: float, price: float, scale: float, m: MarketMeta) -> float:
-    """USDC-notional sizing -> shares, honoring exchange & reward minimums."""
+    """USDC-notional sizing -> shares. Per-order minimums applied in _add_layers
+    (reward scoring is per ORDER, so the floor must hold per layer, not per total)."""
     shares = (base_usdc / max(price, m.tick_size)) * max(scale, 0.0)
-    if shares <= 0:
-        return 0.0
-    floor = max(m.min_order_size, m.rewards_min_size)
-    # round up small-but-real sizes to the reward min so they actually score
-    if 0.5 * floor <= shares < floor:
-        shares = floor
-    return round(shares, 2) if shares >= m.min_order_size else 0.0
+    return round(shares, 2) if shares > 0 else 0.0
 
 
 def _add_layers(
     quotes: list[Quote], token_id: str, side: Side, top_price: float, tick: float, dec: int,
     total_size: float, layers: int, step_ticks: int, *, down: bool,
+    exchange_min: float = 0.0, reward_floor: float = 0.0,
 ) -> None:
-    """Split size across `layers` price levels stepping away from the touch."""
+    """Split size across `layers` price levels stepping away from the touch.
+
+    Each ORDER must meet the exchange min and, when within reach (>=50% of it),
+    is bumped to `reward_floor` (the reward min-size × the profile margin) so it
+    actually scores — the program scores per order, so a floor applied to the
+    total is worthless. Layers that can't reach the floor are consolidated into
+    fewer, larger orders rather than resting unscoring dust.
+    """
     if total_size <= 0:
         return
     layers = max(1, layers)
+    reward_floor = max(reward_floor, exchange_min)
     per = round(total_size / layers, 2)
-    if per <= 0:
-        per = total_size
-        layers = 1
+    # consolidate: if a split layer would fall below half the reward floor,
+    # use fewer layers so each resting order can still score
+    while layers > 1 and reward_floor > 0 and per < 0.5 * reward_floor:
+        layers -= 1
+        per = round(total_size / layers, 2)
+    if reward_floor > 0 and 0.5 * reward_floor <= per < reward_floor:
+        per = reward_floor  # bump each order up to scoring size
+    if per < exchange_min or per <= 0:
+        return
     for i in range(layers):
         offset = i * step_ticks * tick
         price = top_price - offset if down else top_price + offset
         price = round(price, dec)
-        if 0 < price < 1 and per > 0:
+        if 0 < price < 1:
             quotes.append(Quote(token_id, side, price, per))
 
 

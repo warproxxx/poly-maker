@@ -160,6 +160,102 @@ def test_open_orders_do_not_taper_quote_size(tmp_path, meta):
     store.close()
 
 
+# ── operator positions in other markets must not leak into bot state ─────
+def test_untracked_positions_are_dropped_and_filtered(tmp_path, meta):
+    """Manual UI bets in markets the bot doesn't trade must not enter state,
+    exposure caps, or PnL — neither from the DB (stale) nor from the API."""
+    eng = _engine_with_market(tmp_path, meta)
+    # stale DB leak: a sports position from an earlier unscoped reconcile
+    eng.state.set_position("sports-token", 370.0, 0.54)
+    dropped = eng.state.drop_untracked_positions(set(eng._token_cid))
+    assert dropped == ["sports-token"]
+    assert eng.state.position("sports-token").size == 0
+    # API filter: only traded tokens survive _only_traded
+    api = {"sports-token": (370.0, 0.54), meta.yes.token_id: (10.0, 0.2)}
+    filtered = eng._only_traded(api)
+    assert "sports-token" not in filtered
+    assert meta.yes.token_id in filtered
+    eng.state.close()
+    eng.catalog.close()
+
+
+def test_per_layer_reward_floor(meta, profile):
+    """Every resting ORDER must meet the rewards min size (scoring is per order).
+    NO at ~0.80 with $100 base -> layers bump to the 100-share floor."""
+    from dataclasses import replace
+
+    m = replace(meta, rewards_min_size=100.0)
+    p = profile.with_overrides({"base_size_usdc": 100.0, "layers": 2})
+    tq = construct_quotes(QuoteInputs(
+        meta=m, regime=Regime.QUIET, fv=0.20, vol_short=0.0, toxicity=0.0,
+        yes_view=view(0.195, 0.197), no_view=view(0.802, 0.805),
+        pos_yes=Position("yes-token"), pos_no=Position("no-token"),
+        profile=p, now=1000.0,
+    ))
+    buys = [q for q in tq.quotes if q.side == Side.BUY]
+    assert buys
+    assert all(q.size >= 100.0 for q in buys), [q.size for q in buys]
+
+
+# ── quoter wake cadence: slow baseline, precise cool-off re-entry ────────
+async def test_quoter_wake_cadence(tmp_path, meta):
+    from polymaker.domain import Fill
+    from polymaker.strategy.regime import RegimeInputs
+
+    eng = _engine_with_market(tmp_path, meta)
+    # flat + QUIET -> slow baseline tick
+    assert eng._next_wake_s(meta.condition_id, 60.0) == 60.0
+    # in an EVENT cool-off -> wake right when it ends, not a full minute later
+    p = eng.profiles[meta.condition_id]
+    eng.regime_m[meta.condition_id].decide(
+        RegimeInputs(now=time.time(), tick=0.001, fv=0.2, prev_fv=0.2, vol_ratio=1.0,
+                     flow_z=0.0, inventory_util=0.0, hours_to_end=999.0, sweep_flagged=True), p)
+    w = eng._next_wake_s(meta.condition_id, 60.0)
+    assert 0 < w <= p.event_cooloff_s + 1
+    # holding inventory -> fast tick to manage exits
+    eng.state.apply_fill(Fill(meta.yes.token_id, Side.BUY, 0.2, 50, "f"))
+    assert eng._next_wake_s(meta.condition_id, 60.0) <= 10.0
+    eng.state.close()
+    eng.catalog.close()
+
+
+# ── a quiet market with a live WS link must NOT false-halt ───────────────
+async def test_quiet_market_with_live_link_is_not_stale(tmp_path, meta):
+    """Thin/quiet markets go long stretches with no book mutation. Halting on
+    book-recency would zero their rewards. With the link up we must keep quoting;
+    only a genuinely DOWN link past the grace window halts."""
+    eng = _engine_with_market(tmp_path, meta)
+    _feed_book(eng, meta)
+    eng.md.connected = True
+    eng.md.disconnected_since = 0.0
+    # backdate the book so a book-recency check would (wrongly) read stale
+    eng.md.book(meta.yes.token_id).local_ts = time.time() - 9999
+    eng.md.book(meta.no.token_id).local_ts = time.time() - 9999
+    await eng._recompute(meta.condition_id)
+    assert len(eng.state.orders) > 0  # still quoting despite a silent book
+    # a genuinely dead link past the grace window DOES halt
+    eng.md.connected = False
+    eng.md.disconnected_since = time.time() - 9999
+    await eng._recompute(meta.condition_id)
+    assert eng.state.orders == {}
+    eng.state.close()
+    eng.catalog.close()
+
+
+# ── stale/past end-date must not halt a still-trading market ─────────────
+def test_past_end_date_is_treated_as_unknown():
+    """"Next PM" appointment markets carry a stale past endDate while still
+    accepting orders. A past date must read as None (unknown), not 0 hours,
+    else the regime machine HALTs a live market and never quotes."""
+    from polymaker.engine import _hours_to_end
+
+    now = time.time()
+    assert _hours_to_end("2020-01-01T00:00:00Z", now) is None  # past -> unknown
+    assert _hours_to_end(None, now) is None
+    future = _hours_to_end("2099-01-01T00:00:00Z", now)
+    assert future is not None and future > 0  # genuine future still measured
+
+
 # ── T2: PnL snapshot + CSV export smoke ──────────────────────────────────
 def test_pnl_snapshot_and_wal(tmp_path):
     s = StateStore(tmp_path / "s.db")

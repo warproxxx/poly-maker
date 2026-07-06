@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -56,6 +57,11 @@ class MarketDataService:
         self._ws: Any = None
         self._stop = asyncio.Event()
         self.connected: bool = False
+        # wall-clock when the link last went down (0 until the first run). Used
+        # for staleness: a QUIET market with a live link is NOT stale — only a
+        # genuinely down connection is. Book-mutation recency can't tell the two
+        # apart on a thin market, so we gate on connection liveness instead.
+        self.disconnected_since: float = 0.0
 
     # ── subscription management ─────────────────────────────────────────
     def set_markets(self, markets: list[tuple[str, list[str]]]) -> None:
@@ -87,6 +93,7 @@ class MarketDataService:
     # ── run loop ────────────────────────────────────────────────────────
     async def run(self) -> None:
         backoff = 1.0
+        self.disconnected_since = time.time()  # start the grace clock for first connect
         while not self._stop.is_set():
             try:
                 await self._connect_and_listen()
@@ -120,6 +127,7 @@ class MarketDataService:
                     self._handle(raw)
             finally:
                 self.connected = False
+                self.disconnected_since = time.time()
 
     def stop(self) -> None:
         self._stop.set()

@@ -92,7 +92,8 @@ class MarketMeta:
     best_bid: float = 0.0
     best_ask: float = 0.0
     liquidity_num: float = 0.0
-    volume_num: float = 0.0
+    volume_num: float = 0.0  # lifetime
+    volume_24hr: float = 0.0  # trailing 24h CLOB volume (drives rebate estimate)
 
     @property
     def yes(self) -> TokenMeta:
