@@ -22,6 +22,7 @@ dependencies = [
     "uvloop>=0.21 ; sys_platform != 'win32'",
     "socksio>=1.0",
     "python-socks>=2.4",
+    "py-builder-relayer-client>=0.0.2",
 ]
 
 [project.scripts]
@@ -65,7 +66,7 @@ warn_return_any = true
 disallow_untyped_defs = true
 # third-party libs without stubs
 [[tool.mypy.overrides]]
-module = ["py_clob_client_v2.*", "sortedcontainers.*", "web3.*", "eth_account.*"]
+module = ["py_clob_client_v2.*", "sortedcontainers.*", "web3.*", "eth_account.*", "py_builder_relayer_client.*", "py_builder_signing_sdk.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

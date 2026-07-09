@@ -168,10 +168,21 @@ class Secrets(BaseSettings):
     browser_address: str = Field(default="", alias="BROWSER_ADDRESS")
     polygon_rpc: str | None = Field(default=None, alias="POLYGON_RPC")
     alert_webhook_url: str | None = Field(default=None, alias="ALERT_WEBHOOK_URL")
+    # Polymarket builder API creds (self-generated via L2 auth: clob.create_builder_api_key)
+    # + relayer URL — needed to merge a V2 DepositWallet (sig_type 1/3), whose execute()
+    # only accepts calls from its factory/relayer. See merge.py.
+    builder_key: str | None = Field(default=None, alias="POLY_BUILDER_KEY")
+    builder_secret: str | None = Field(default=None, alias="POLY_BUILDER_SECRET")
+    builder_passphrase: str | None = Field(default=None, alias="POLY_BUILDER_PASSPHRASE")
+    relayer_url: str = Field(default="https://relayer-v2.polymarket.com", alias="POLY_RELAYER_URL")
 
     @property
     def has_wallet(self) -> bool:
         return bool(self.pk and self.browser_address)
+
+    @property
+    def has_builder_creds(self) -> bool:
+        return bool(self.builder_key and self.builder_secret and self.builder_passphrase)
 
 
 class Config(BaseModel):
